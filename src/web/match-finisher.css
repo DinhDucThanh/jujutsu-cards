@@ -1,0 +1,365 @@
+/*
+ * The match finisher. Timeline, in seconds from the verdict:
+ *   0.00  the arena drops to ink-wash greyscale (the freeze)
+ *   0.20  two diagonal ink strokes cut top-left to bottom-right, with the gong
+ *   0.36  the verdict stamps land on both sides
+ *   0.64  the loser's side takes the hit: red slash, shake
+ *
+ * Every animation is one shot and is re-triggered by adding `.finish` again on the next
+ * match, so a rematch reads exactly like the first finish.
+ */
+
+#match.finished {
+  filter: contrast(150%) grayscale(80%);
+  transition: filter 200ms ease-out;
+}
+
+.result {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.result.finish {
+  animation: result-scrim 260ms ease-out both;
+}
+
+@keyframes result-scrim {
+  from {
+    opacity: 0;
+    background: rgba(0, 0, 0, 0.95);
+  }
+  to {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.78);
+  }
+}
+
+/* ---------- ink strokes ---------- */
+
+.finisher-slash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150vmax;
+  height: 6px;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, #7f1d1d 12%, #fee2e2 50%, #7f1d1d 88%, transparent);
+  filter: drop-shadow(0 0 18px rgba(225, 29, 72, 0.9));
+  transform: translate(-50%, -50%) rotate(30deg) scaleX(0.05);
+}
+
+.finisher-slash.slash-b {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #fcd34d 20%, #fff7ed 50%, #fcd34d 80%, transparent);
+  filter: drop-shadow(0 0 12px rgba(251, 191, 36, 0.9));
+  transform: translate(-50%, -50%) rotate(33deg) scaleX(0.05);
+}
+
+.result.finish .slash-a {
+  animation: slash-cut 520ms cubic-bezier(0.16, 0.85, 0.24, 1) 200ms both;
+}
+
+.result.finish .slash-b {
+  animation: slash-cut-thin 620ms cubic-bezier(0.16, 0.85, 0.24, 1) 290ms both;
+}
+
+@keyframes slash-cut {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(30deg) scaleX(0.05);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(30deg) scaleX(1);
+  }
+}
+
+@keyframes slash-cut-thin {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(33deg) scaleX(0.05);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(33deg) scaleX(1);
+  }
+}
+
+/* ---------- finisher layout ---------- */
+
+.finisher {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  padding: 24px;
+}
+
+.finisher-badge {
+  margin: 0 0 16px;
+  font-size: clamp(1rem, 3vw, 1.5rem);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: #fff7ed;
+  text-align: center;
+  text-shadow:
+    0 0 18px rgba(244, 63, 94, 0.8),
+    0 4px 14px rgba(0, 0, 0, 0.9);
+}
+
+.result.finish .finisher-badge {
+  animation: finisher-slam 640ms cubic-bezier(0.16, 0.9, 0.2, 1) 220ms both;
+}
+
+@keyframes finisher-slam {
+  0% {
+    opacity: 0;
+    letter-spacing: 0.4em;
+    transform: scale(1.8) rotate(-3deg);
+  }
+  60% {
+    opacity: 1;
+    letter-spacing: 0.06em;
+    transform: scale(0.96) rotate(0.6deg);
+  }
+  100% {
+    opacity: 1;
+    letter-spacing: 0.18em;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/* ---------- symmetrical duel cards ---------- */
+
+.duel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  width: min(760px, 92vw);
+}
+
+.duel-side {
+  position: relative;
+  overflow: hidden;
+  padding: 18px;
+  border: 1px solid rgba(196, 181, 253, 0.25);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(40, 30, 70, 0.7), rgba(10, 8, 20, 0.85));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+}
+
+.duel-side.is-winner {
+  border-color: rgba(251, 191, 36, 0.7);
+}
+
+.duel-side.is-loser {
+  border-color: rgba(190, 18, 60, 0.6);
+  filter: saturate(0.6);
+}
+
+.duel-portrait {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 8px;
+  border-radius: 50%;
+  font-size: 1.8rem;
+  color: #fef3c7;
+  background: radial-gradient(circle at 30% 30%, #3b2a5c, #120c22);
+  border: 1px solid rgba(196, 181, 253, 0.4);
+}
+
+/* The winner's aura pulses; the loser's avatar takes a red slash. */
+.result.finish .is-winner .duel-portrait {
+  animation: winner-aura 1.6s ease-in-out 600ms infinite;
+}
+
+@keyframes winner-aura {
+  0%,
+  100% {
+    box-shadow: 0 0 10px rgba(251, 191, 36, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 26px rgba(251, 191, 36, 0.95);
+  }
+}
+
+.duel-side.is-loser .duel-portrait::after {
+  content: '';
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  top: 50%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #fecdd3, #e11d48, transparent);
+  transform: rotate(-28deg);
+  opacity: 0;
+}
+
+.result.finish .is-loser .duel-portrait::after {
+  animation: loser-cut 240ms ease-out 640ms both;
+}
+
+@keyframes loser-cut {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.result.finish .is-loser {
+  animation: loser-shake 420ms ease-out 640ms both;
+}
+
+@keyframes loser-shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  20% {
+    transform: translate(-6px, 3px);
+  }
+  40% {
+    transform: translate(5px, -3px);
+  }
+  60% {
+    transform: translate(-3px, 2px);
+  }
+  80% {
+    transform: translate(2px, -1px);
+  }
+}
+
+/* The verdict stamp: 祓 for the winner in gold, 敗北 for the loser in blood red. */
+.duel-stamp {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  padding: 2px 8px;
+  font-size: 2.2rem;
+  font-weight: 800;
+  line-height: 1.1;
+  border: 3px solid currentColor;
+  border-radius: 6px;
+  opacity: 0.9;
+  transform: rotate(-8deg);
+  color: #fcd34d;
+}
+
+.duel-side.is-loser .duel-stamp {
+  color: #be123c;
+}
+
+.result.finish .duel-stamp {
+  animation: stamp-slam 420ms cubic-bezier(0.16, 0.9, 0.2, 1) 360ms both;
+}
+
+@keyframes stamp-slam {
+  0% {
+    opacity: 0;
+    transform: rotate(-8deg) scale(1.6);
+  }
+  100% {
+    opacity: 0.9;
+    transform: rotate(-8deg) scale(1);
+  }
+}
+
+.duel-title {
+  margin: 0 0 10px;
+  font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fed7aa;
+}
+
+.duel-side.is-loser .duel-title {
+  color: #fda4af;
+}
+
+.duel-stats {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.duel-stats > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.8rem;
+}
+
+.duel-stats dt {
+  color: #c4b5fd;
+}
+
+.duel-stats dd {
+  margin: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #f5f3ff;
+}
+
+.finisher-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  width: min(760px, 92vw);
+  margin-top: 18px;
+}
+
+@media (max-width: 560px) {
+  .duel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #match.finished {
+    transition: none;
+  }
+
+  .result.finish,
+  .result.finish .slash-a,
+  .result.finish .slash-b,
+  .result.finish .finisher-badge,
+  .result.finish .duel-stamp,
+  .result.finish .is-winner .duel-portrait,
+  .result.finish .is-loser,
+  .result.finish .is-loser .duel-portrait::after {
+    animation: none;
+  }
+
+  .finisher-slash {
+    opacity: 1;
+    transform: translate(-50%, -50%) rotate(30deg);
+  }
+
+  .finisher-slash.slash-b {
+    transform: translate(-50%, -50%) rotate(33deg);
+  }
+
+  .duel-side.is-loser .duel-portrait::after {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "name": "jujutsu-cards-sorcery-clash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jujutsu Cards: Sorcery Clash — a peer-to-peer memory duel",
+  "author": "Jujutsu Cards",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "dev:electron": "concurrently -k -n vite,electron -c cyan,magenta \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:web": "vite build",
+    "build:electron": "npm run build:web && electron-builder --win --x64",
+    "dist:portable": "npm run build:web && electron-builder --win portable --x64",
+    "dist:installer": "npm run build:web && electron-builder --win nsis --x64",
+    "smoke:electron": "electron . --smoke --file",
+    "icon": "node tools/make-icon.cjs",
+    "verify:package": "node tools/check-asar.cjs"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^26.6.5",
+    "concurrently": "^10.0.6",
+    "electron": "^44.8.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
+    "wait-on": "^9.5.1"
+  },
+  "dependencies": {
+    "peerjs": "^1.5.5"
+  },
+  "build": {
+    "appId": "com.jujutsucards.sorceryclash",
+    "productName": "Jujutsu Cards - Sorcery Clash",
+    "electronDist": "node_modules/electron/dist",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": ["AppImage"]
+    },
+    "portable": {
+      "artifactName": "Jujutsu-Cards-${version}-portable-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "Jujutsu-Cards-${version}-setup-x64.${ext}"
+    }
+  }
+}

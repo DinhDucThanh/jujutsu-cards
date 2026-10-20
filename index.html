@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#090a16">
+    <title>Jujutsu Cards: Sorcery Clash (prototype)</title>
+    <link rel="stylesheet" href="/src/web/styles.css" />
+    <link rel="stylesheet" href="/src/web/settings-modal.css" />
+    <link rel="stylesheet" href="/src/web/match-finisher.css" />
+  </head>
+  <body>
+    <div id="landscape-lock-modal" class="landscape-lock-screen" aria-live="polite">
+      <div class="phone-rotate-icon">
+        <div class="phone-body"></div>
+      </div>
+      <h2 class="lock-title">VUI LÒNG XOAY NGANG THIẾT BỊ</h2>
+      <p class="lock-subtitle">Trò chơi yêu cầu màn hình ngang để hiển thị đầy đủ đấu trường bàn cờ kép.</p>
+    </div>
+
+    <header class="topbar">
+      <h1>Jujutsu Cards <span>Sorcery Clash</span></h1>
+      <div class="hud">
+        <span id="mode-label"></span>
+        <span id="turn-label"></span>
+      </div>
+      <div class="topbar-actions">
+        <span id="net-status" class="net-status" hidden></span>
+        <button id="codex" type="button" class="ghost codex-open">
+          <span class="codex-glyph" aria-hidden="true">冊</span><span class="codex-word">Sorcery </span>Codex
+        </button>
+        <button id="settings-open" type="button" class="ghost settings-open" aria-haspopup="dialog" aria-expanded="false"
+          aria-label="Settings" title="Settings">⚙️</button>
+        <button id="sound-toggle" type="button" class="ghost sound-toggle" aria-pressed="false"
+          aria-label="Mute sound (M)" title="Mute sound (M)">
+          <svg class="sound-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path class="sound-body" d="M4.5 9h3.2L12 5.6v12.8L7.7 15H4.5z" />
+            <path class="sound-wave sound-wave-near" d="M15.2 9.6a3.6 3.6 0 0 1 0 4.8" />
+            <path class="sound-wave sound-wave-far" d="M17.8 7.2a7.4 7.4 0 0 1 0 9.6" />
+            <path class="sound-muted" d="M15.4 9.6l4.4 4.8M19.8 9.6l-4.4 4.8" />
+          </svg>
+        </button>
+        <button id="new-match" type="button" class="ghost" hidden>New match</button>
+      </div>
+    </header>
+
+    <section id="setup" class="setup">
+      <div class="setup-head">
+        <h2>⚔️ NEW MATCH · 呪術廻戦</h2>
+        <div class="setup-head-actions">
+          <button id="open-rules" type="button" class="ghost">📖 Rules &amp; Modes</button>
+          <button id="randomize-all" type="button" class="chaos-roll">🎲 Pure Chaos — Randomize All</button>
+        </div>
+      </div>
+      <section id="host-room" class="host-room" hidden aria-label="Host room">
+        <div class="host-room-head">
+          <h3>Room</h3>
+          <span id="host-status" class="lobby-status" role="status">Opening the room…</span>
+        </div>
+        <div id="host-code" class="room-code" hidden>
+          <span class="room-code-label">Room code</span>
+          <strong id="host-code-value"></strong>
+          <button id="host-copy" type="button" class="ghost">Copy</button>
+        </div>
+        <div class="host-actions">
+          <button id="launch-match" type="button" class="primary" disabled>🚀 Launch Match</button>
+          <button id="cancel-room" type="button" class="ghost">Cancel room</button>
+        </div>
+      </section>
+      <form id="setup-form">
+        <fieldset class="setup-group">
+          <legend>Arena &amp; mode</legend>
+        <label>
+          Opponent
+          <select id="mode">
+            <option value="RANDOM">🎲 Random opponent</option>
+            <option value="PVE" selected>Player vs AI</option>
+            <option value="PVP">Pass &amp; Play (2 players)</option>
+            <option value="ONLINE">Online / LAN (room code)</option>
+            <option value="SANDBOX">Sandbox / Training Dummy</option>
+          </select>
+        </label>
+        <label id="net-field" hidden>
+          Online role
+          <select id="net-role">
+            <option value="HOST" selected>Host a room (you are player 1)</option>
+            <option value="JOIN">Join a room with a code</option>
+          </select>
+        </label>
+        <label id="room-code-field" hidden>
+          Room code
+          <input id="room-code-input" type="text" maxlength="6" autocomplete="off" spellcheck="false" placeholder="K7QP4" />
+        </label>
+        <label id="grade-field">
+          AI difficulty
+          <select id="grade"></select>
+        </label>
+        <label>
+          Board layout
+          <select id="board-mode">
+            <option value="RANDOM">🎲 Random layout</option>
+            <option value="DUAL" selected>Dual boards (simultaneous)</option>
+            <option value="DUAL_TURN_BASED">Dual boards (turn based)</option>
+            <option value="SHARED">Shared board (turn based)</option>
+          </select>
+        </label>
+        <label>
+          Grid size
+          <select id="board-size">
+            <option value="RANDOM">🎲 Random grid</option>
+            <option value="16" selected>4 × 4 (16 cards)</option>
+            <option value="36">6 × 6 (36 cards)</option>
+          </select>
+        </label>
+        </fieldset>
+        <fieldset class="setup-group">
+          <legend>Combatants</legend>
+        <label>Player 1 character <select id="p1-character"></select></label>
+        <label id="p2-field">Player 2 character <select id="p2-character"></select></label>
+        <p id="p2-locked" class="p2-locked" hidden>P2 Choice: Waiting for P2 selection...</p>
+        </fieldset>
+        <fieldset class="setup-group">
+          <legend>Match modifiers</legend>
+        <label>
+          Starting HP
+          <select id="starting-hp">
+            <option value="RANDOM">🎲 Random HP</option>
+            <option value="100" selected>100 HP</option>
+            <option value="200">200 HP</option>
+            <option value="300">300 HP</option>
+            <option value="400">400 HP</option>
+            <option value="CUSTOM">Custom…</option>
+          </select>
+        </label>
+        <label id="custom-hp-field" hidden>
+          Custom HP (50–1000)
+          <input id="custom-hp" type="number" min="50" max="1000" step="10" value="250" inputmode="numeric" />
+        </label>
+        <label>
+          Board clear reward
+          <select id="board-clear-reward">
+            <option value="RANDOM">🎲 Random reward</option>
+            <option value="RANDOM_AUTO" selected>Instant random (no pause)</option>
+            <option value="MANUAL_CHOICE">Manual choice (pick a blessing)</option>
+          </select>
+        </label>
+        <label>
+          Cursed traps
+          <select id="traps">
+            <option value="RANDOM">🎲 Random traps</option>
+            <option value="0">0</option>
+            <option value="2" selected>2</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        <label>
+          Lore synergy pairs
+          <select id="synergies">
+            <option value="RANDOM">🎲 Random synergies</option>
+            <option value="0">0</option>
+            <option value="1" selected>1</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+            <option value="4">4</option>
+          </select>
+        </label>
+        </fieldset>
+        <p id="start-hint" class="hint form-hint"></p>
+        <button type="submit" class="primary start-match">Start Match</button>
+      </form>
+    </section>
+
+    <main id="match" class="arena" data-board-mode="DUAL" hidden>
+      <!-- Training ground only: filled by sandbox-toolbar.ts, hidden in every other mode. -->
+      <aside id="sandbox-toolbar" class="sandbox-toolbar" aria-label="Sandbox debug controls" hidden></aside>
+      <aside class="side" data-player="p1">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="char-name"></h2>
+            <span class="label"></span>
+          </div>
+          <div class="bar hp-wrap">
+            <div class="bar-fill hp-fill"></div>
+            <span class="bar-text hp-text"></span>
+          </div>
+          <div class="bar shield-wrap off">
+            <div class="bar-fill shield-fill"></div>
+            <span class="bar-text shield-text"></span>
+          </div>
+          <div class="bar ce-wrap">
+            <div class="bar-fill ce-fill"></div>
+            <span class="bar-text ce-text"></span>
+          </div>
+          <div class="stats">
+            <span class="combo"></span>
+            <span class="pairs"></span>
+          </div>
+          <div class="status"></div>
+          <div class="actions">
+            <button type="button" class="ability-btn skill-btn" title="">
+              <span class="ability-name"></span>
+              <span class="ability-cost"></span>
+            </button>
+            <button type="button" class="ability-btn ultimate-btn" title="">
+              <span class="ability-name"></span>
+              <span class="ability-cost"></span>
+            </button>
+          </div>
+          <!-- Domain / Simple Domain state, filled by domain-status.ts. -->
+          <div class="domain-status-slot"></div>
+          <div class="awakening-toast-slot"></div>
+        </section>
+        <div class="grid-slot"><div class="board-frame"><div class="board" data-board="p1"></div></div></div>
+        <!-- The combat log lives under the left column, out of the board's way. -->
+        <section class="log-panel">
+          <h3>Event log</h3>
+          <ol id="log" class="log"></ol>
+        </section>
+      </aside>
+
+      <section class="center">
+        <div class="turn-panel">
+          <div id="turn-banner" class="turn-banner" role="status"></div>
+          <div class="turn-timer">
+            <div id="turn-timer-fill" class="turn-timer-fill"></div>
+          </div>
+          <div class="turn-meta">
+            <span id="turn-time"></span>
+            <span id="turn-detail"></span>
+          </div>
+        </div>
+        <div id="banner" class="banner" role="status"></div>
+        <div class="grid-slot shared-slot"><div class="board-frame"><div class="board" data-board="SHARED"></div></div></div>
+        <div class="round-info">
+          <span id="round-cycle"></span>
+          <span id="round-pace"></span>
+        </div>
+      </section>
+
+      <aside class="side" data-player="p2">
+        <section class="panel">
+          <div class="panel-head">
+            <h2 class="char-name"></h2>
+            <span class="label"></span>
+          </div>
+          <div class="bar hp-wrap">
+            <div class="bar-fill hp-fill"></div>
+            <span class="bar-text hp-text"></span>
+          </div>
+          <div class="bar shield-wrap off">
+            <div class="bar-fill shield-fill"></div>
+            <span class="bar-text shield-text"></span>
+          </div>
+          <div class="bar ce-wrap">
+            <div class="bar-fill ce-fill"></div>
+            <span class="bar-text ce-text"></span>
+          </div>
+          <div class="stats">
+            <span class="combo"></span>
+            <span class="pairs"></span>
+          </div>
+          <div class="status"></div>
+          <div class="actions">
+            <button type="button" class="ability-btn skill-btn" title="">
+              <span class="ability-name"></span>
+              <span class="ability-cost"></span>
+            </button>
+            <button type="button" class="ability-btn ultimate-btn" title="">
+              <span class="ability-name"></span>
+              <span class="ability-cost"></span>
+            </button>
+          </div>
+          <!-- Domain / Simple Domain state, filled by domain-status.ts. -->
+          <div class="domain-status-slot"></div>
+          <div class="awakening-toast-slot"></div>
+        </section>
+        <div class="grid-slot"><div class="board-frame"><div class="board" data-board="p2"></div></div></div>
+        <!-- Upcoming turn allocations (skips, extra turns): filled by turn-queue.ts. -->
+        <aside id="turn-queue" class="turn-queue" aria-label="Upcoming turns" hidden>
+          <div class="turn-queue-head">
+            <span>Turn Queue</span>
+            <span>Next moves</span>
+          </div>
+        </aside>
+      </aside>
+    </main>
+
+    <div id="lobby" class="lobby" hidden>
+      <div class="lobby-card" role="dialog" aria-modal="true" aria-labelledby="lobby-title">
+        <h2 id="lobby-title">Online match</h2>
+        <p id="lobby-status" class="lobby-status" role="status">Opening the room…</p>
+        <div id="lobby-code" class="room-code" hidden>
+          <span class="room-code-label">Room code</span>
+          <strong id="lobby-code-value"></strong>
+          <button id="copy-code" type="button" class="ghost">Copy</button>
+        </div>
+        <p id="lobby-hint" class="hint"></p>
+        <section id="guest-picker" class="guest-picker" hidden aria-label="Select your sorcerer">
+          <h3>Select Your Sorcerer</h3>
+          <div id="guest-picker-grid" class="guest-picker-grid" role="group" aria-label="Sorcerer choices"></div>
+          <p id="guest-pick-status" class="hint"></p>
+        </section>
+        <section id="match-conditions" class="match-conditions" hidden aria-label="Match conditions">
+          <h3>Match Conditions</h3>
+          <dl id="match-conditions-list"></dl>
+        </section>
+        <button id="lobby-cancel" type="button" class="ghost">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Floating damage and action badges, over everything the arena draws. -->
+    <div id="fct" class="fct-layer" aria-hidden="true"></div>
+
+    <div id="vfx" class="vfx-layer" aria-hidden="true"></div>
+    <canvas id="vfx-canvas" class="vfx-canvas" aria-hidden="true"></canvas>
+
+    <div id="flash" class="flash" aria-hidden="true"></div>
+    <div id="domain-overlay" class="domain-overlay" aria-live="assertive">
+      <div class="title"></div>
+      <div class="sub"></div>
+    </div>
+
+    <div id="sentencing" class="sentencing"></div>
+
+    <div id="awakening" class="awakening"></div>
+
+    <div id="reshuffle" class="reshuffle" aria-hidden="true">
+      <div class="title">BOARD CLEARED!</div>
+      <div class="sub"></div>
+    </div>
+
+    <div id="codex-modal" class="codex" hidden>
+      <div class="codex-scrim" data-close></div>
+      <section class="codex-panel" role="dialog" aria-modal="true" aria-labelledby="codex-title" tabindex="-1">
+        <header class="codex-head">
+          <div class="codex-head-text">
+            <h2 id="codex-title">Sorcery Codex</h2>
+            <p>Lore pairs, techniques and domain clashes — read straight from the live rules.</p>
+          </div>
+          <button type="button" class="codex-close" data-close aria-label="Close the codex">✕</button>
+        </header>
+        <div class="codex-tabs" role="tablist" aria-label="Codex sections"></div>
+        <div id="codex-body" class="codex-body"></div>
+        <footer class="codex-foot">
+          <span>Esc closes · ← → switch sections</span>
+          <span>The turn clock keeps running while the codex is open.</span>
+        </footer>
+      </section>
+    </div>
+
+    <!-- Idle Death Gamble (Hakari's Domain). Hidden until the module adds .show. -->
+    <div id="hakari"></div>
+
+    <div id="settings-modal" class="settings" hidden>
+      <div class="settings-scrim" data-close></div>
+      <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+        <header class="settings-head">
+          <h2 id="settings-title">⚙️ SYSTEM SETTINGS · 環境設定</h2>
+          <button type="button" class="settings-close" data-close aria-label="Close settings">✕</button>
+        </header>
+        <div class="settings-layout">
+          <nav class="settings-nav" aria-label="Settings sections">
+            <button type="button" class="settings-tab active" data-tab="audio" aria-selected="true">🔊 Audio &amp; SFX</button>
+            <button type="button" class="settings-tab" data-tab="gameplay" aria-selected="false">🎮 Gameplay</button>
+            <button type="button" class="settings-tab" data-tab="developer" aria-selected="false">ℹ️ Developer Info</button>
+          </nav>
+          <div class="settings-body">
+            <section class="settings-page" data-panel="audio">
+              <div class="mixer-row">
+                <label class="mixer-label" for="vol-master">Master Volume <output class="mixer-badge" data-badge="master"></output></label>
+                <input id="vol-master" type="range" min="0" max="100" step="1" data-volume="master" />
+                <label class="mixer-mute"><input type="checkbox" data-mute="master" /> Mute</label>
+              </div>
+              <div class="mixer-row">
+                <label class="mixer-label" for="vol-bgm">BGM / OST Volume <output class="mixer-badge" data-badge="bgm"></output></label>
+                <input id="vol-bgm" type="range" min="0" max="100" step="1" data-volume="bgm" />
+                <label class="mixer-mute"><input type="checkbox" data-mute="bgm" /> Mute</label>
+              </div>
+              <div class="mixer-row">
+                <label class="mixer-label" for="vol-sfx">SFX Volume <output class="mixer-badge" data-badge="sfx"></output></label>
+                <input id="vol-sfx" type="range" min="0" max="100" step="1" data-volume="sfx" />
+                <label class="mixer-mute"><input type="checkbox" data-mute="sfx" /> Mute</label>
+              </div>
+              <div class="mixer-tests">
+                <button type="button" class="ghost" data-test="black-flash">⚡ Test JJK Thunder Flash</button>
+                <button type="button" class="ghost" data-test="flip">🃏 Test Soft Paper Flip</button>
+              </div>
+            </section>
+            <section class="settings-page" data-panel="gameplay" hidden>
+              <label class="pref-row"><input type="checkbox" data-pref="screenShake" /> Screen Shake</label>
+              <label class="pref-row"><input type="checkbox" data-pref="floatingText" /> Floating Combat Text</label>
+              <label class="pref-row"><input type="checkbox" data-pref="domainZoom" /> Dynamic Domain Zoom VFX</label>
+            </section>
+            <section class="settings-page" data-panel="developer" hidden>
+              <div class="dev-seal-card">
+                <span class="dev-seal" aria-hidden="true">呪</span>
+                <p class="dev-credit">Thành đẹp zai best Tamyn btw.</p>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="result" class="result" hidden>
+      <!-- Two ink strokes that cut across the screen behind the verdict. -->
+      <div class="finisher-slash slash-a" aria-hidden="true"></div>
+      <div class="finisher-slash slash-b" aria-hidden="true"></div>
+      <div class="finisher">
+        <p class="finisher-badge" data-finish-badge></p>
+        <div class="duel">
+          <section class="duel-side" data-side="p1">
+            <span class="duel-stamp" data-finish-stamp aria-hidden="true"></span>
+            <span class="duel-portrait" data-finish-portrait aria-hidden="true"></span>
+            <h2 class="duel-title" data-finish-title></h2>
+            <dl class="duel-stats">
+              <div><dt>Damage · standard</dt><dd data-stat="damageStandard"></dd></div>
+              <div><dt>Damage · true / piercing</dt><dd data-stat="damagePiercing"></dd></div>
+              <div><dt>Black flashes</dt><dd data-stat="blackFlashes"></dd></div>
+              <div><dt>Barrier absorbed</dt><dd data-stat="barrierAbsorbed"></dd></div>
+              <div><dt>Boards cleared</dt><dd data-stat="boardsCleared"></dd></div>
+            </dl>
+          </section>
+          <section class="duel-side" data-side="p2">
+            <span class="duel-stamp" data-finish-stamp aria-hidden="true"></span>
+            <span class="duel-portrait" data-finish-portrait aria-hidden="true"></span>
+            <h2 class="duel-title" data-finish-title></h2>
+            <dl class="duel-stats">
+              <div><dt>Damage · standard</dt><dd data-stat="damageStandard"></dd></div>
+              <div><dt>Damage · true / piercing</dt><dd data-stat="damagePiercing"></dd></div>
+              <div><dt>Black flashes</dt><dd data-stat="blackFlashes"></dd></div>
+              <div><dt>Barrier absorbed</dt><dd data-stat="barrierAbsorbed"></dd></div>
+              <div><dt>Boards cleared</dt><dd data-stat="boardsCleared"></dd></div>
+            </dl>
+          </section>
+        </div>
+        <div class="finisher-actions">
+          <button id="rematch" type="button" class="primary">⚔️ Rematch / Tái Đấu</button>
+          <button id="back-setup" type="button" class="ghost">⚙️ Match Setup / Kèo Mới</button>
+        </div>
+        <p id="rematch-status" class="rematch-status" role="status"></p>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" role="status"></div>
+
+    <script type="module" src="/src/web/main.ts"></script>
+  </body>
+</html>

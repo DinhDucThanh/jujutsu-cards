@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Vite build output
+dist/
+
+# Electron-builder packaged output
+release/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+*.swp
