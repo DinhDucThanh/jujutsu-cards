@@ -5980,3 +5980,51 @@ body:has(.hakari.show, .sentencing.show, #domain-overlay.show) #sandbox-toolbar 
     will-change: transform;
   }
 }
+
+/* ---------- online lobby: waiting radar and copy button ---------- */
+
+#lobby-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.lobby-status.error .pulsing-radar {
+  display: none;
+}
+
+.pulsing-radar {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #4ade80;
+  animation: pulseRadar 1.8s infinite;
+}
+
+@keyframes pulseRadar {
+  0% {
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(74, 222, 128, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulsing-radar {
+    animation: none;
+  }
+}
+
+.btn-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 9ch;
+}

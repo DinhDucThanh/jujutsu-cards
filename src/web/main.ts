@@ -1078,7 +1078,7 @@ function hideLobby(): void {
 
 function setLobbyStatus(text: string, error = false): void {
   const status = $('#lobby-status');
-  status.textContent = text;
+  $('#lobby-status-text').textContent = text;
   status.classList.toggle('error', error);
 }
 
@@ -2658,9 +2658,15 @@ function bindEvents(): void {
   $('#lobby-cancel').addEventListener('click', () => showSetup());
   $('#copy-code').addEventListener('click', () => {
     const code = $('#lobby-code').dataset.code ?? '';
+    const label = $('#copy-code-label');
     void navigator.clipboard
       ?.writeText(code)
-      .then(() => setLobbyStatus('Room code copied.'))
+      .then(() => {
+        label.textContent = '✓ Copied!';
+        window.setTimeout(() => {
+          label.textContent = 'Copy';
+        }, 2000);
+      })
       .catch(() => toast(`Room code: ${code}`));
   });
 

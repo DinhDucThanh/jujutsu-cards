@@ -54,13 +54,16 @@ afterEach(() => {
 });
 
 describe('ICE configuration', () => {
-  it("lists Google's STUN servers one per entry", () => {
+  it("lists Google's STUN servers one per entry, then the Open Relay TURN fallbacks", () => {
     expect(ICE_SERVERS.map((server) => server.urls)).toEqual([
       'stun:stun.l.google.com:19302',
       'stun:stun1.l.google.com:19302',
       'stun:stun2.l.google.com:19302',
       'stun:stun3.l.google.com:19302',
       'stun:stun4.l.google.com:19302',
+      'turn:openrelay.metered.ca:80',
+      'turn:openrelay.metered.ca:443',
+      'turn:openrelay.metered.ca:443?transport=tcp',
     ]);
   });
 

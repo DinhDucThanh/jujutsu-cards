@@ -111,8 +111,9 @@ export const SIGNALING_FAILED = 'Could not reach the matchmaking service. Check 
  * Wi-Fi and one that never leaves "connecting". They are tried in order as ICE gathers.
  *
  * A STUN server cannot help when both sides sit behind symmetric NAT (some 4G carriers and
- * corporate firewalls): that path needs a TURN relay, which is a separate, credentialed
- * service rather than something a public list can provide.
+ * corporate firewalls): that path needs a TURN relay. The relays below are the Open Relay
+ * Project's public test credentials, so they are shared, rate-limited and may be retired;
+ * replace them with your own credentialed TURN service for anything beyond casual play.
  */
 export const ICE_SERVERS: readonly RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -120,6 +121,9 @@ export const ICE_SERVERS: readonly RTCIceServer[] = [
   { urls: 'stun:stun2.l.google.com:19302' },
   { urls: 'stun:stun3.l.google.com:19302' },
   { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelay', credential: 'openrelay' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelay', credential: 'openrelay' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelay', credential: 'openrelay' },
 ];
 
 /**

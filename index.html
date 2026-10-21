@@ -290,11 +290,14 @@
     <div id="lobby" class="lobby" hidden>
       <div class="lobby-card" role="dialog" aria-modal="true" aria-labelledby="lobby-title">
         <h2 id="lobby-title">Online match</h2>
-        <p id="lobby-status" class="lobby-status" role="status">Opening the room…</p>
+        <p id="lobby-status" class="lobby-status" role="status"><span class="pulsing-radar" aria-hidden="true"></span><span id="lobby-status-text">Opening the room…</span></p>
         <div id="lobby-code" class="room-code" hidden>
           <span class="room-code-label">Room code</span>
           <strong id="lobby-code-value"></strong>
-          <button id="copy-code" type="button" class="ghost">Copy</button>
+          <button id="copy-code" type="button" class="ghost btn-copy" title="Copy room code">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <span id="copy-code-label">Copy</span>
+          </button>
         </div>
         <p id="lobby-hint" class="hint"></p>
         <section id="guest-picker" class="guest-picker" hidden aria-label="Select your sorcerer">
