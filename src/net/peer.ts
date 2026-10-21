@@ -63,7 +63,7 @@ export const ROOM_CONNECT_TIMEOUT_MS = 10_000;
 export const P2P_HANDSHAKE = { INIT: 'HANDSHAKE_INIT', ACK: 'HANDSHAKE_ACK' } as const;
 /** How long either side waits for the greeting before the channel is called dead. */
 export const HANDSHAKE_TIMEOUT_MS = 4_000;
-/** Reported when the channel opens but the greeting never completes. */
+/** Reported to the guest when the channel opens but the greeting never completes. */
 export const HANDSHAKE_FAILED = 'The data channel opened but the handshake never completed. Try again.';
 
 /**
@@ -81,6 +81,25 @@ const MAX_CHUNKS = 256;
  * from this side of the handshake.
  */
 export const ROOM_CONNECT_FAILED = 'Could not connect to room. Please check the room code or try again.';
+
+/**
+ * What the host is told when a dial-in dies before it becomes a player.
+ *
+ * The host's room is not what failed, so it is never handed the guest's message: "check the
+ * room code and try again" is advice the host cannot act on, and printing it on the waiting
+ * screen reads as though the room had expired. The room is still there, and the next guest
+ * on a reachable network can still join it.
+ */
+export const HOST_GUEST_UNREACHABLE = 'A player could not reach this room.';
+
+/**
+ * The host's waiting detail, and the only thing that closes that screen is the player.
+ *
+ * Waiting for a guest is not a request with a deadline: the room id stays registered on the
+ * signaling server for as long as the host leaves the screen open, so nothing here may be
+ * torn down on a timer.
+ */
+export const HOST_ROOM_READY = '🟢 Room ready! Waiting for Player 2...';
 
 /** Reported when the signaling socket itself never opens. */
 export const SIGNALING_FAILED = 'Could not reach the matchmaking service. Check your connection and try again.';
@@ -144,6 +163,8 @@ function describeError(error: { type?: string; message?: string }): string {
 
 /** What a caller wants to know when a connection is proven, ends, or its ICE dies. */
 interface ConnectionHooks {
+  /** The channel opened. Sent before the greeting, so a dial deadline can be dropped. */
+  readonly onOpen?: () => void;
   /** The greeting completed in both directions: game packets may flow. */
   readonly onVerified: () => void;
   /** The channel closed after being usable (or was closed by the other side). */
@@ -240,13 +261,28 @@ function attachConnection(
   hooks: ConnectionHooks,
 ): void {
   let verified = false;
-  /** Set when the greeting failed, so the close that follows it does not report twice. */
+  /** Set once a failure has been reported, so the close that follows it stays silent. */
   let dead = false;
   let handshakeTimer: Timer | null = null;
   let chunks: { readonly total: number; readonly parts: string[]; filled: number } | null = null;
+  /** The detail this side owes on failure: the guest owns the join, the host owns the room. */
+  const unreachable = role === 'HOST' ? HOST_GUEST_UNREACHABLE : ROOM_CONNECT_FAILED;
 
   const stopTimer = (): void => {
     handshakeTimer = clear(handshakeTimer);
+  };
+
+  /**
+   * Reports a terminal failure exactly once, and never after the channel has verified.
+   *
+   * A failed ICE negotiation or a broken channel is followed by `close`, which would
+   * otherwise overwrite the reason the player needs with "the other player disconnected".
+   */
+  const fail = (detail: string): void => {
+    if (verified || dead) return;
+    dead = true;
+    stopTimer();
+    hooks.onFailed(detail);
   };
 
   const verify = (): void => {
@@ -257,7 +293,11 @@ function attachConnection(
   };
 
   const begin = (): void => {
-    if (verified) return;
+    // A channel already reported dead (ICE gave up on it) must not greet anyone.
+    if (verified || dead) return;
+    // The dial reached the other side: whatever happens next is a handshake problem, not a
+    // wrong-room-code one, so the guest's join deadline is dropped before the greeting.
+    hooks.onOpen?.();
     if (role === 'GUEST') {
       console.info('[P2P] DataChannel opened on Guest — sending JOIN handshake');
       sendGreeting(connection, P2P_HANDSHAKE.INIT);
@@ -269,10 +309,11 @@ function attachConnection(
     handshakeTimer = globalThis.setTimeout(() => {
       handshakeTimer = null;
       if (verified || dead) return;
-      // The close below fires `close`: mark the channel dead first so it reports the reason
-      // the player needs (a greeting that never came) rather than "the other player left".
-      dead = true;
-      hooks.onFailed(HANDSHAKE_FAILED);
+      console.warn('[P2P] the data channel opened but the greeting never arrived');
+      // Report the reason the player needs before closing, so the `close` that follows it
+      // does not describe the channel as the other player leaving. "Try again" is advice
+      // for the guest whose join this was; the host is told a player could not reach it.
+      fail(role === 'HOST' ? unreachable : HANDSHAKE_FAILED);
       try {
         connection.close();
       } catch {
@@ -339,16 +380,17 @@ function attachConnection(
     hooks.onClosed('The other player disconnected.');
   });
   connection.on('error', (error) => {
-    stopTimer();
     const detail = describeError(error as { type?: string; message?: string });
-    handlers.onStatus({ state: 'error', detail });
-    hooks.onFailed(detail);
+    // A guest's broken channel is a join the guest has to retry. On the host it is one
+    // failed dial-in, not a fault in the room, so it never becomes an error on that screen.
+    if (role === 'GUEST' && !verified && !dead) handlers.onStatus({ state: 'error', detail });
+    fail(role === 'HOST' ? unreachable : detail);
   });
   // ICE has its own verdict, and it arrives before the data channel ever opens. Without
   // this listener a blocked path is indistinguishable from a slow one and the screen keeps
   // its spinner until the connection timeout, long after the browser knew it had failed.
   connection.on('iceStateChanged', (state) => {
-    if (state === 'failed') hooks.onFailed(ROOM_CONNECT_FAILED);
+    if (state === 'failed') fail(unreachable);
   });
 }
 
@@ -493,7 +535,7 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
     closed: () => closed,
     onOpen: (peer) => {
       if (closed) return;
-      handlers.onStatus({ state: 'waiting', detail: '🟢 Room created! Share the code with your friend.' });
+      handlers.onStatus({ state: 'waiting', detail: HOST_ROOM_READY });
       peer.on('connection', (incoming) => {
         // One guest per room: a second dial-in is turned away rather than fought over.
         if (connection) {
@@ -593,6 +635,11 @@ export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
       const dial = peer.connect(peerIdForRoom(code), { reliable: true, serialization: 'json' });
       connection = dial;
       attachConnection(dial, 0, 'GUEST', handlers, {
+        // The room answered: from here on a failure is a handshake failure, and saying
+        // "check the room code" would send the player to correct something that is right.
+        onOpen: () => {
+          connectTimer = clear(connectTimer);
+        },
         onVerified: () => {
           connectTimer = clear(connectTimer);
           if (!closed && !terminated) handlers.onStatus({ state: 'connected', detail: 'Connected to the host' });

@@ -10,6 +10,8 @@ vi.mock('peerjs', async () => {
 import {
   HANDSHAKE_FAILED,
   HANDSHAKE_TIMEOUT_MS,
+  HOST_GUEST_UNREACHABLE,
+  HOST_ROOM_READY,
   ICE_SERVERS,
   PEER_OPEN_TIMEOUT_MS,
   ROOM_CONNECT_FAILED,
@@ -90,7 +92,7 @@ describe('hostRoom lifecycle', () => {
 
     expect(events.at(-1)).toEqual({
       state: 'waiting',
-      detail: '🟢 Room created! Share the code with your friend.',
+      detail: HOST_ROOM_READY,
     });
   });
 
@@ -156,7 +158,9 @@ describe('hostRoom lifecycle', () => {
 
     expect(incoming.closed).toBe(true);
     expect(events.at(-1)?.state).toBe('waiting');
-    expect(events.at(-1)?.detail).toContain('handshake never completed');
+    // "Try again" belongs to the guest: the host's room never stopped working.
+    expect(events.at(-1)?.detail).toBe(`${HOST_GUEST_UNREACHABLE} The room is still open.`);
+    expect(events.some((event) => event.detail.includes(HANDSHAKE_FAILED))).toBe(false);
   });
 
   it('returns to waiting when a guest connection ends', () => {
@@ -193,7 +197,7 @@ describe('hostRoom lifecycle', () => {
     // The retry claims the same id, so the code the host is about to share never changes.
     expect(FakePeer.last().id).toBe('jjk-sorcery-K7QP4');
     FakePeer.last().claim();
-    expect(events.at(-1)?.detail).toContain('Room created');
+    expect(events.at(-1)?.detail).toBe(HOST_ROOM_READY);
   });
 
   it('retries a network error and opens the room on the second socket', () => {
@@ -209,7 +213,7 @@ describe('hostRoom lifecycle', () => {
     FakePeer.last().claim();
     expect(events.at(-1)).toEqual({
       state: 'waiting',
-      detail: '🟢 Room created! Share the code with your friend.',
+      detail: HOST_ROOM_READY,
     });
   });
 
@@ -224,6 +228,73 @@ describe('hostRoom lifecycle', () => {
 
     expect(events.at(-1)).toEqual({ state: 'error', detail: SIGNALING_FAILED });
     expect(FakePeer.instances).toHaveLength(SIGNALING_ATTEMPTS);
+  });
+
+  it('keeps the room open indefinitely while no guest arrives', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+
+    const opened = events.length;
+    vi.advanceTimersByTime(60_000);
+
+    // A minute of waiting is silence: no timer closes the room, and the socket that claimed
+    // the code is still the one the guest will dial.
+    expect(events.slice(opened)).toEqual([]);
+    expect(peer.destroyed).toBe(false);
+    expect(peer.reconnects).toBe(0);
+
+    // The guest who finally shows up still connects to the same room.
+    const incoming = peer.connect('guest');
+    peer.emit('connection', incoming);
+    incoming.arrive();
+    incoming.emit('data', { type: 'HANDSHAKE_INIT', payload: { role: 'GUEST' } });
+    expect(events.at(-1)).toEqual({ state: 'connected', detail: 'Player 2 connected' });
+  });
+
+  it('never hands the host the guest\u2019s room-code message', () => {
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+    const incoming = peer.connect('guest');
+    peer.emit('connection', incoming);
+
+    // ICE gives up on the path: the guest has a join to retry, the host has a room that is
+    // still open and a code that is still valid.
+    incoming.emit('iceStateChanged', 'failed');
+
+    expect(events.at(-1)).toEqual({
+      state: 'waiting',
+      detail: `${HOST_GUEST_UNREACHABLE} The room is still open.`,
+    });
+    expect(events.some((event) => event.detail.includes(ROOM_CONNECT_FAILED))).toBe(false);
+    expect(events.some((event) => event.state === 'error')).toBe(false);
+    expect(peer.destroyed).toBe(false);
+
+    // The close that follows a dead channel must not replace the reason with "left".
+    incoming.emit('close');
+    expect(events.at(-1)?.detail).toBe(`${HOST_GUEST_UNREACHABLE} The room is still open.`);
+  });
+
+  it('treats a broken inbound channel as a failed attempt, not a room error', () => {
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+    const incoming = peer.connect('guest');
+    peer.emit('connection', incoming);
+    incoming.arrive();
+
+    incoming.emit('error', { type: 'webrtc', message: 'connection failed' });
+
+    expect(events.at(-1)).toEqual({
+      state: 'waiting',
+      detail: `${HOST_GUEST_UNREACHABLE} The room is still open.`,
+    });
+    expect(events.some((event) => event.state === 'error')).toBe(false);
   });
 });
 
@@ -262,6 +333,22 @@ describe('joinRoom lifecycle', () => {
 
     expect(events.at(-1)).toEqual({ state: 'error', detail: HANDSHAKE_FAILED });
     expect(peer.destroyed).toBe(true);
+  });
+
+  it('drops the join deadline as soon as the channel opens', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => joinRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+    peer.dials[0]?.arrive();
+
+    // The room answered the dial, so a greeting that never lands is a handshake problem.
+    // Telling the player to check the code would send them to correct what is already right.
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS + 10);
+
+    expect(events.at(-1)).toEqual({ state: 'error', detail: HANDSHAKE_FAILED });
+    expect(events.some((event) => event.detail === ROOM_CONNECT_FAILED)).toBe(false);
   });
 
   it('gives up with the room-code message when the dial never opens', () => {

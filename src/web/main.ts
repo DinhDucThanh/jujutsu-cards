@@ -62,7 +62,6 @@ import {
 } from '../engine/index.js';
 import { OnlineGuest, OnlineHost, toGameConfigPayload, type GuestHooks, type HostHooks } from '../net/online.js';
 import {
-  ROOM_CONNECT_FAILED,
   createRoomCode,
   hostRoom,
   joinRoom,
@@ -1162,6 +1161,11 @@ function syncOnlineLobbyPreview(): void {
  * waits: player 2's dropdown is replaced by a locked status line, and the launch button
  * only arms once the guest has picked a sorcerer. The engine is created at launch, so the
  * rules the guest sees are exactly the ones the match starts with.
+ *
+ * Nothing here counts down. A host leaving the screen open is doing what the screen asks of
+ * them, so the room stays registered on the signaling server until a guest arrives or the
+ * player presses Cancel: only the guest's join has a deadline, because only a join can be
+ * aimed at a code that does not exist.
  */
 function startOnlineHost(): void {
   const code = createRoomCode();
@@ -1187,9 +1191,10 @@ function startOnlineHost(): void {
         case 'waiting':
           // A dropped guest's pick must not arm the launch button for the next one.
           if (session?.engine === null) setP2Choice(null);
-          // The transport's own wording carries the room code hand-off message, and the
-          // failure detail when a guest's network could not reach this one.
-          setHostStatus(status.detail, status.detail.startsWith(ROOM_CONNECT_FAILED));
+          // Waiting is the room's normal state, never an error: a failed dial-in is
+          // reported here as a note on a room that is still open, because the host has
+          // nothing to retry and the code on screen is still valid.
+          setHostStatus(status.detail);
           return;
         case 'connecting':
           setHostStatus('Connecting players…');
