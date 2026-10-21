@@ -11,10 +11,17 @@ type Handler = (...args: never[]) => void;
 export class FakeConnection {
   open = false;
   closed = false;
-  readonly sent: string[] = [];
+  /** Every frame the transport handed to the channel, in order. */
+  readonly sent: unknown[] = [];
+  readonly options: Record<string, unknown>;
   private readonly handlers = new Map<string, Handler[]>();
 
-  constructor(readonly peer: string) {}
+  constructor(
+    readonly peer: string,
+    options: Record<string, unknown> = {},
+  ) {
+    this.options = options;
+  }
 
   on(event: string, handler: Handler): this {
     const list = this.handlers.get(event) ?? [];
@@ -29,7 +36,7 @@ export class FakeConnection {
     }
   }
 
-  send(data: string): void {
+  send(data: unknown): void {
     this.sent.push(data);
   }
 
@@ -88,8 +95,8 @@ export class FakePeer {
     }
   }
 
-  connect(peerId: string): FakeConnection {
-    const connection = new FakeConnection(peerId);
+  connect(peerId: string, options: Record<string, unknown> = {}): FakeConnection {
+    const connection = new FakeConnection(peerId, options);
     this.dials.push(connection);
     return connection;
   }

@@ -53,6 +53,29 @@ export const SIGNALING_RETRY_DELAY_MS = 1_200;
 export const ROOM_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
+ * The transport greeting. No game packet may cross the channel until it has completed.
+ *
+ * The guest speaks first — the host never sends on open — so a message can only be in
+ * flight once the receiver has proven it is listening. That is what makes a Web-to-Web
+ * handshake deterministic: the guest knows the host heard it before it starts the match,
+ * and the host knows the guest can hear it before it announces one.
+ */
+export const P2P_HANDSHAKE = { INIT: 'HANDSHAKE_INIT', ACK: 'HANDSHAKE_ACK' } as const;
+/** How long either side waits for the greeting before the channel is called dead. */
+export const HANDSHAKE_TIMEOUT_MS = 4_000;
+/** Reported when the channel opens but the greeting never completes. */
+export const HANDSHAKE_FAILED = 'The data channel opened but the handshake never completed. Try again.';
+
+/**
+ * Characters of JSON per frame. PeerJS's JSON channel rejects anything at or above its
+ * 16,300-byte MTU instead of chunking it, and escaping inflates a JSON string, so the
+ * transport splits packets itself. A 36-card snapshot is ~20KB and must still fit.
+ */
+const CHUNK_CHARS = 6_000;
+/** A ceiling on reassembly, so a hostile frame cannot ask for unbounded memory. */
+const MAX_CHUNKS = 256;
+
+/**
  * The one message a failed join owes the player. It names both likely causes — a mistyped
  * code and a network that cannot reach the other peer — because the two look identical
  * from this side of the handshake.
@@ -119,28 +142,204 @@ function describeError(error: { type?: string; message?: string }): string {
   }
 }
 
-/** What a caller wants to know when a connection ends or its ICE negotiation dies. */
+/** What a caller wants to know when a connection is proven, ends, or its ICE dies. */
 interface ConnectionHooks {
+  /** The greeting completed in both directions: game packets may flow. */
+  readonly onVerified: () => void;
   /** The channel closed after being usable (or was closed by the other side). */
   readonly onClosed: (detail: string) => void;
-  /** No candidate pair ever worked: the two networks cannot reach each other directly. */
+  /** No candidate pair worked, or the greeting never completed. */
   readonly onFailed: (detail: string) => void;
 }
 
-/** Wires a data connection to the packet handler and mirrors its lifecycle as status. */
+/** One slice of an encoded packet, carried inside the JSON frame. */
+interface ChunkFrame {
+  readonly __p2p: 'chunk';
+  readonly seq: number;
+  readonly total: number;
+  readonly data: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isHandshake(raw: unknown, type: string): boolean {
+  return isRecord(raw) && raw.type === type;
+}
+
+function isChunkFrame(raw: unknown): raw is ChunkFrame {
+  if (!isRecord(raw) || raw.__p2p !== 'chunk') return false;
+  const { seq, total, data } = raw;
+  if (typeof seq !== 'number' || typeof total !== 'number' || typeof data !== 'string') return false;
+  return (
+    Number.isInteger(seq) &&
+    Number.isInteger(total) &&
+    total > 0 &&
+    total <= MAX_CHUNKS &&
+    seq >= 0 &&
+    seq < total
+  );
+}
+
+/**
+ * Sends one greeting frame. Guarded on `open` because a DataChannel that is closing throws
+ * synchronously in some browsers, and a greeting that cannot be sent is a room that cannot
+ * exist — the caller's handshake timer turns that into a clear failure.
+ */
+function sendGreeting(connection: DataConnection, type: string): void {
+  if (!connection.open) return;
+  try {
+    connection.send({ type, payload: { role: type === P2P_HANDSHAKE.INIT ? 'GUEST' : 'HOST' } });
+  } catch (error) {
+    console.warn('[P2P] handshake frame failed:', error);
+  }
+}
+
+/**
+ * Sends one packet as JSON slices.
+ *
+ * JSON is the serializer every browser implements identically; the price is PeerJS's hard
+ * 16,300-byte frame limit, which it enforces by dropping the message instead of chunking
+ * it. A 36-card snapshot is about 20KB, so the transport slices its own frames. The data
+ * channel is ordered and reliable, so the slices arrive in order.
+ */
+function sendPacket(connection: DataConnection, packet: NetworkPacket): void {
+  if (!connection.open) return;
+  const json = encodePacket(packet);
+  const total = Math.max(1, Math.ceil(json.length / CHUNK_CHARS));
+  for (let seq = 0; seq < total; seq += 1) {
+    const frame: ChunkFrame = {
+      __p2p: 'chunk',
+      seq,
+      total,
+      data: json.slice(seq * CHUNK_CHARS, (seq + 1) * CHUNK_CHARS),
+    };
+    try {
+      connection.send(frame);
+    } catch (error) {
+      console.warn('[P2P] packet frame failed:', error);
+      return;
+    }
+  }
+}
+
+/**
+ * Wires a data connection to the greeting, the packet handler and the lifecycle.
+ *
+ * The greeting is strictly two-way. The guest speaks first on open; the host sends nothing
+ * until it hears that greeting, and both sides only report `connected` once the answer has
+ * crossed the wire. No game packet is accepted before then, so a state update can never be
+ * pushed at a channel whose listener on the other side is not attached yet.
+ */
 function attachConnection(
   connection: DataConnection,
   from: SeatIndex,
+  role: 'HOST' | 'GUEST',
   handlers: RoomHandlers,
   hooks: ConnectionHooks,
 ): void {
+  let verified = false;
+  /** Set when the greeting failed, so the close that follows it does not report twice. */
+  let dead = false;
+  let handshakeTimer: Timer | null = null;
+  let chunks: { readonly total: number; readonly parts: string[]; filled: number } | null = null;
+
+  const stopTimer = (): void => {
+    handshakeTimer = clear(handshakeTimer);
+  };
+
+  const verify = (): void => {
+    if (verified) return;
+    verified = true;
+    stopTimer();
+    hooks.onVerified();
+  };
+
+  const begin = (): void => {
+    if (verified) return;
+    if (role === 'GUEST') {
+      console.info('[P2P] DataChannel opened on Guest — sending JOIN handshake');
+      sendGreeting(connection, P2P_HANDSHAKE.INIT);
+    } else {
+      console.info('[P2P] DataChannel opened on Host — waiting for the guest handshake');
+    }
+    // Both sides give the greeting a few seconds. A channel that opens but never carries
+    // it is exactly as dead as one that never opened, and must not leave a spinner behind.
+    handshakeTimer = globalThis.setTimeout(() => {
+      handshakeTimer = null;
+      if (verified || dead) return;
+      // The close below fires `close`: mark the channel dead first so it reports the reason
+      // the player needs (a greeting that never came) rather than "the other player left".
+      dead = true;
+      hooks.onFailed(HANDSHAKE_FAILED);
+      try {
+        connection.close();
+      } catch {
+        // Already closed by the other side.
+      }
+    }, HANDSHAKE_TIMEOUT_MS);
+  };
+
+  connection.on('open', begin);
+  // The host can be handed a connection that is already open, after the answer handshake.
+  if (connection.open) begin();
+
   connection.on('data', (raw: unknown) => {
-    // The channel carries JSON strings; `decodePacket` rejects anything else.
-    const packet = decodePacket(typeof raw === 'string' ? raw : null);
+    if (isHandshake(raw, P2P_HANDSHAKE.ACK)) {
+      if (role !== 'GUEST' || verified) return;
+      console.info('[P2P] Handshake verified');
+      verify();
+      return;
+    }
+    if (isHandshake(raw, P2P_HANDSHAKE.INIT)) {
+      if (role !== 'HOST') return;
+      console.info('[P2P] Guest handshake received — sending WELCOME');
+      sendGreeting(connection, P2P_HANDSHAKE.ACK);
+      verify();
+      return;
+    }
+    // Nothing else may travel before the greeting: a packet that arrives early is a bug in
+    // the sender, and acting on it would run a command on a half-open channel.
+    if (!verified) return;
+
+    if (isChunkFrame(raw)) {
+      // A slice only belongs to a group started by its own first frame: a mismatch means the
+      // earlier group was abandoned, and reassembling across the two would corrupt the JSON.
+      if (raw.seq === 0 || chunks === null || chunks.total !== raw.total) {
+        if (raw.seq !== 0) {
+          chunks = null;
+          return;
+        }
+        chunks = { total: raw.total, parts: new Array<string>(raw.total), filled: 0 };
+      }
+      const buffer = chunks;
+      if (buffer === null) return;
+      if (buffer.parts[raw.seq] === undefined) {
+        buffer.parts[raw.seq] = raw.data;
+        buffer.filled += 1;
+      }
+      if (buffer.filled === buffer.total) {
+        const json = buffer.parts.join('');
+        chunks = null;
+        const packet = decodePacket(json);
+        if (packet) handlers.onPacket(packet, from);
+      }
+      return;
+    }
+
+    // A single unframed packet: an older peer, or a test double.
+    const packet = typeof raw === 'string' ? decodePacket(raw) : null;
     if (packet) handlers.onPacket(packet, from);
   });
-  connection.on('close', () => hooks.onClosed('The other player disconnected.'));
+
+  connection.on('close', () => {
+    stopTimer();
+    if (dead) return;
+    hooks.onClosed('The other player disconnected.');
+  });
   connection.on('error', (error) => {
+    stopTimer();
     const detail = describeError(error as { type?: string; message?: string });
     handlers.onStatus({ state: 'error', detail });
     hooks.onFailed(detail);
@@ -304,7 +503,12 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
         connection = incoming;
         // The dial-in is not a connection yet: ICE still has to find a path through both NATs.
         handlers.onStatus({ state: 'connecting', detail: 'Connecting players…' });
-        attachConnection(incoming, 1, handlers, {
+        // The host sends nothing here. Its first frame is the answer to the guest's greeting,
+        // sent from inside `attachConnection` once that greeting has arrived.
+        attachConnection(incoming, 1, 'HOST', handlers, {
+          onVerified: () => {
+            if (!closed) handlers.onStatus({ state: 'connected', detail: 'Player 2 connected' });
+          },
           onClosed: (detail) => {
             connection = null;
             if (!closed) handlers.onStatus({ state: 'waiting', detail });
@@ -315,12 +519,6 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
             if (!closed) handlers.onStatus({ state: 'waiting', detail: `${detail} The room is still open.` });
           },
         });
-        // `incoming.open` can already be true when the host answers after the handshake.
-        const announce = (): void => {
-          if (!closed) handlers.onStatus({ state: 'connected', detail: 'Player 2 connected' });
-        };
-        if (incoming.open) announce();
-        else incoming.on('open', announce);
       });
       peer.on('disconnected', () => {
         if (closed) return;
@@ -341,7 +539,7 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
   return {
     code,
     send(packet) {
-      if (connection?.open) connection.send(encodePacket(packet));
+      if (connection) sendPacket(connection, packet);
     },
     close() {
       closed = true;
@@ -389,9 +587,16 @@ export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
     onOpen: (peer) => {
       if (closed || terminated) return;
       handlers.onStatus({ state: 'connecting', detail: `Finding room ${code}…` });
-      const dial = peer.connect(peerIdForRoom(code), { reliable: true });
+      // `serialization: 'json'` is stated here, on the initiating side, because that is the
+      // side that chooses it for the pair: binarypack is what fails silently between two
+      // browser bundles. The host inherits this from the connection's metadata.
+      const dial = peer.connect(peerIdForRoom(code), { reliable: true, serialization: 'json' });
       connection = dial;
-      attachConnection(dial, 0, handlers, {
+      attachConnection(dial, 0, 'GUEST', handlers, {
+        onVerified: () => {
+          connectTimer = clear(connectTimer);
+          if (!closed && !terminated) handlers.onStatus({ state: 'connected', detail: 'Connected to the host' });
+        },
         onClosed: (detail) => {
           connection = null;
           if (!closed && !terminated) handlers.onStatus({ state: 'disconnected', detail });
@@ -400,11 +605,6 @@ export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
       });
       // A dial that never opens is not a wait worth leaving the player in.
       connectTimer = globalThis.setTimeout(() => giveUp(ROOM_CONNECT_FAILED), ROOM_CONNECT_TIMEOUT_MS);
-      dial.on('open', () => {
-        if (closed || terminated) return;
-        connectTimer = clear(connectTimer);
-        handlers.onStatus({ state: 'connected', detail: 'Connected to the host' });
-      });
       peer.on('error', (error) => {
         if (closed || terminated) return;
         const detail = describeError(error as { type?: string; message?: string });
@@ -434,7 +634,7 @@ export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
   return {
     code,
     send(packet) {
-      if (connection?.open) connection.send(encodePacket(packet));
+      if (connection) sendPacket(connection, packet);
     },
     close() {
       closed = true;

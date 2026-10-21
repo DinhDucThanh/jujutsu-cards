@@ -8,6 +8,8 @@ vi.mock('peerjs', async () => {
 });
 
 import {
+  HANDSHAKE_FAILED,
+  HANDSHAKE_TIMEOUT_MS,
   ICE_SERVERS,
   PEER_OPEN_TIMEOUT_MS,
   ROOM_CONNECT_FAILED,
@@ -23,7 +25,12 @@ import {
 import type { NetworkPacket } from '../../src/net/network.js';
 import { FakePeer } from '../helpers/fake-peer.js';
 
-const PING = { type: 'PING_PONG', senderIndex: 1, payload: { nonce: 1 } } as unknown as NetworkPacket;
+const PING = {
+  type: 'PING_PONG',
+  senderIndex: 1,
+  payload: { nonce: 1 },
+  timestamp: 1,
+} as unknown as NetworkPacket;
 
 const rooms: PeerRoom[] = [];
 
@@ -98,7 +105,58 @@ describe('hostRoom lifecycle', () => {
     expect(events.at(-1)).toEqual({ state: 'connecting', detail: 'Connecting players…' });
 
     incoming.arrive();
+    // The host sends nothing on open: it waits for the guest's greeting.
+    expect(incoming.sent).toHaveLength(0);
+    expect(events.at(-1)?.state).toBe('connecting');
+
+    incoming.emit('data', { type: 'HANDSHAKE_INIT', payload: { role: 'GUEST' } });
+
+    expect(incoming.sent[0]).toEqual({ type: 'HANDSHAKE_ACK', payload: { role: 'HOST' } });
     expect(events.at(-1)).toEqual({ state: 'connected', detail: 'Player 2 connected' });
+  });
+
+  it('drops game packets that arrive before the greeting', () => {
+    const packets: unknown[] = [];
+    const { onStatus } = record();
+    room(
+      (status) =>
+        hostRoom('K7QP4', {
+          onPacket: (packet) => packets.push(packet),
+          onStatus: status,
+        }),
+      onStatus,
+    );
+    const peer = FakePeer.last();
+    peer.claim();
+    const incoming = peer.connect('guest');
+    peer.emit('connection', incoming);
+    incoming.arrive();
+
+    const packet = { type: 'PING_PONG', senderIndex: 1, payload: { nonce: 1 }, timestamp: 1 };
+    incoming.emit('data', packet);
+    expect(packets).toHaveLength(0);
+
+    incoming.emit('data', { type: 'HANDSHAKE_INIT', payload: { role: 'GUEST' } });
+    incoming.emit('data', { __p2p: 'chunk', seq: 0, total: 1, data: JSON.stringify(packet) });
+    expect(packets).toHaveLength(1);
+    expect(packets[0]).toMatchObject({ type: 'PING_PONG' });
+  });
+
+  it('returns to waiting when the guest never greets the host', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+    const incoming = peer.connect('guest');
+    peer.emit('connection', incoming);
+    incoming.arrive();
+
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS + 10);
+
+    expect(incoming.closed).toBe(true);
+    expect(events.at(-1)?.state).toBe('waiting');
+    expect(events.at(-1)?.detail).toContain('handshake never completed');
   });
 
   it('returns to waiting when a guest connection ends', () => {
@@ -109,6 +167,7 @@ describe('hostRoom lifecycle', () => {
     const incoming = peer.connect('guest');
     peer.emit('connection', incoming);
     incoming.arrive();
+    incoming.emit('data', { type: 'HANDSHAKE_INIT', payload: { role: 'GUEST' } });
 
     incoming.close();
     expect(events.at(-1)).toEqual({ state: 'waiting', detail: 'The other player disconnected.' });
@@ -175,11 +234,34 @@ describe('joinRoom lifecycle', () => {
     const peer = FakePeer.last();
     peer.claim();
 
-    expect(peer.dials[0]?.peer).toBe('jjk-sorcery-K7QP4');
+    const dial = peer.dials[0];
+    if (!dial) throw new Error('the guest never dialed');
+    expect(dial.peer).toBe('jjk-sorcery-K7QP4');
+    // JSON, stated on the initiating side, is what the host inherits for the pair.
+    expect(dial.options).toMatchObject({ reliable: true, serialization: 'json' });
     expect(events.at(-1)?.state).toBe('connecting');
 
-    peer.dials[0]?.arrive();
+    dial.arrive();
+    // The guest speaks first: JOIN goes out on open, and `connected` waits for the answer.
+    expect(dial.sent[0]).toEqual({ type: 'HANDSHAKE_INIT', payload: { role: 'GUEST' } });
+    expect(events.at(-1)?.state).toBe('connecting');
+
+    dial.emit('data', { type: 'HANDSHAKE_ACK', payload: { role: 'HOST' } });
     expect(events.at(-1)).toEqual({ state: 'connected', detail: 'Connected to the host' });
+  });
+
+  it('gives up when the host never answers the greeting', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => joinRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const peer = FakePeer.last();
+    peer.claim();
+    peer.dials[0]?.arrive();
+
+    vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS + 10);
+
+    expect(events.at(-1)).toEqual({ state: 'error', detail: HANDSHAKE_FAILED });
+    expect(peer.destroyed).toBe(true);
   });
 
   it('gives up with the room-code message when the dial never opens', () => {
@@ -216,6 +298,7 @@ describe('joinRoom lifecycle', () => {
     const peer = FakePeer.last();
     peer.claim();
     peer.dials[0]?.arrive();
+    peer.dials[0]?.emit('data', { type: 'HANDSHAKE_ACK', payload: { role: 'HOST' } });
 
     vi.advanceTimersByTime(ROOM_CONNECT_TIMEOUT_MS * 2);
 
@@ -271,7 +354,38 @@ describe('room transport', () => {
     expect(dial.sent).toHaveLength(0);
 
     dial.arrive();
-    joiner.send(PING);
+    // The greeting is the guest's first frame; the packet follows it.
     expect(dial.sent).toHaveLength(1);
+    joiner.send(PING);
+    expect(dial.sent).toHaveLength(2);
+    expect(dial.sent[1]).toMatchObject({ __p2p: 'chunk', seq: 0, total: 1 });
+  });
+
+  it('reassembles a packet split across several frames', () => {
+    const packets: unknown[] = [];
+    const { onStatus } = record();
+    room(
+      (status) =>
+        joinRoom('K7QP4', {
+          onPacket: (packet) => packets.push(packet),
+          onStatus: status,
+        }),
+      onStatus,
+    );
+    const peer = FakePeer.last();
+    peer.claim();
+    const dial = peer.dials[0];
+    if (!dial) throw new Error('the guest never dialed');
+    dial.arrive();
+    dial.emit('data', { type: 'HANDSHAKE_ACK', payload: { role: 'HOST' } });
+
+    const json = JSON.stringify(PING);
+    const mid = Math.floor(json.length / 2);
+    dial.emit('data', { __p2p: 'chunk', seq: 0, total: 2, data: json.slice(0, mid) });
+    expect(packets).toHaveLength(0);
+    dial.emit('data', { __p2p: 'chunk', seq: 1, total: 2, data: json.slice(mid) });
+
+    expect(packets).toHaveLength(1);
+    expect(packets[0]).toMatchObject({ type: 'PING_PONG' });
   });
 });
