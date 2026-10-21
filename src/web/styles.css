@@ -5584,6 +5584,86 @@ button.sound-toggle.muted .sound-body {
   padding: 10px;
 }
 
+/* ---------- online lobby modal: Host / Join tabs ---------- */
+
+.online-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: rgba(10, 8, 23, 0.75);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  border-radius: 999px;
+}
+
+.online-tab {
+  flex: 1;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.online-tab:hover {
+  color: var(--text);
+  border-color: var(--violet);
+}
+
+.online-tab.is-active {
+  background: #2e1f63;
+  border-color: var(--violet);
+  color: var(--text);
+}
+
+.online-tab:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
+.online-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.online-panel[hidden] {
+  display: none;
+}
+
+.online-panel > .primary {
+  width: 100%;
+  padding: 10px;
+}
+
+.online-code-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.online-code-field input {
+  background: #120d1d;
+  color: var(--text);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 8px;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1.3rem;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+  transition: border-color 0.15s ease;
+}
+
+.online-code-field input:hover {
+  border-color: rgba(192, 132, 252, 0.5);
+}
+
 .lobby-card {
   width: min(620px, 100%);
   /* The picker makes the card taller than a laptop viewport; it must scroll, not clip. */

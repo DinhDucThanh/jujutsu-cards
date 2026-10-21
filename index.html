@@ -54,21 +54,6 @@
           <button id="randomize-all" type="button" class="chaos-roll">🎲 Pure Chaos — Randomize All</button>
         </div>
       </div>
-      <section id="host-room" class="host-room" hidden aria-label="Host room">
-        <div class="host-room-head">
-          <h3>Room</h3>
-          <span id="host-status" class="lobby-status" role="status">Opening the room…</span>
-        </div>
-        <div id="host-code" class="room-code" hidden>
-          <span class="room-code-label">Room code</span>
-          <strong id="host-code-value"></strong>
-          <button id="host-copy" type="button" class="ghost">Copy</button>
-        </div>
-        <div class="host-actions">
-          <button id="launch-match" type="button" class="primary" disabled>🚀 Launch Match</button>
-          <button id="cancel-room" type="button" class="ghost">Cancel room</button>
-        </div>
-      </section>
       <form id="setup-form">
         <fieldset class="setup-group">
           <legend>Arena &amp; mode</legend>
@@ -81,17 +66,6 @@
             <option value="ONLINE">Online / LAN (room code)</option>
             <option value="SANDBOX">Sandbox / Training Dummy</option>
           </select>
-        </label>
-        <label id="net-field" hidden>
-          Online role
-          <select id="net-role">
-            <option value="HOST" selected>Host a room (you are player 1)</option>
-            <option value="JOIN">Join a room with a code</option>
-          </select>
-        </label>
-        <label id="room-code-field" hidden>
-          Room code
-          <input id="room-code-input" type="text" maxlength="6" autocomplete="off" spellcheck="false" placeholder="K7QP4" />
         </label>
         <label id="grade-field">
           AI difficulty
@@ -310,6 +284,45 @@
           <dl id="match-conditions-list"></dl>
         </section>
         <button id="lobby-cancel" type="button" class="ghost">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Online lobby: host a room or join one with a code. Opened from Start Match in Online mode. -->
+    <div id="online-modal" class="lobby online-modal" hidden>
+      <div class="lobby-card online-card" role="dialog" aria-modal="true" aria-labelledby="online-title">
+        <h2 id="online-title">Online Lobby</h2>
+        <div class="online-tabs" role="tablist" aria-label="Online lobby">
+          <button id="tab-host" type="button" class="online-tab is-active" role="tab" aria-selected="true" aria-controls="panel-host">Host</button>
+          <button id="tab-join" type="button" class="online-tab" role="tab" aria-selected="false" aria-controls="panel-join" tabindex="-1">Join</button>
+        </div>
+        <section id="panel-host" class="online-panel" role="tabpanel" aria-labelledby="tab-host">
+          <p class="hint">You are player 1. Open a room, share the code, and launch once player 2 picks a sorcerer.</p>
+          <button id="open-room" type="button" class="primary">🏯 Open Room</button>
+          <section id="host-room" class="host-room" hidden aria-label="Host room">
+            <div class="host-room-head">
+              <h3>Room</h3>
+              <span id="host-status" class="lobby-status" role="status">Opening the room…</span>
+            </div>
+            <div id="host-code" class="room-code" hidden>
+              <span class="room-code-label">Room code</span>
+              <strong id="host-code-value"></strong>
+              <button id="host-copy" type="button" class="ghost">Copy</button>
+            </div>
+            <div class="host-actions">
+              <button id="launch-match" type="button" class="primary" disabled>🚀 Launch Match</button>
+              <button id="cancel-room" type="button" class="ghost">Cancel room</button>
+            </div>
+          </section>
+        </section>
+        <section id="panel-join" class="online-panel" role="tabpanel" aria-labelledby="tab-join" hidden>
+          <p class="hint">Enter the five-character code player 1 shares with you.</p>
+          <label class="online-code-field">
+            Room code
+            <input id="room-code-input" type="text" maxlength="6" autocomplete="off" spellcheck="false" placeholder="K7QP4" />
+          </label>
+          <button id="join-room" type="button" class="primary">🔗 Join Room</button>
+        </section>
+        <button id="online-close" type="button" class="ghost">Close</button>
       </div>
     </div>
 

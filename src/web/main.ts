@@ -658,23 +658,20 @@ function syncSetupFields(): void {
   const opponent = readOpponent();
   const pve = opponent === MODE.PVE;
   const online = opponent === MODE.ONLINE;
-  const joining = online && readNetRole() === NET_ROLE.JOIN;
-  const hosting = online && readNetRole() === NET_ROLE.HOST;
+  // A room's host is the only seat whose setup this form decides; a guest's comes from the host.
+  const hosting = online && session?.netRole === NET_ROLE.HOST;
   // The training dummy has no build to pick: only its grid and HP matter. A guest never
   // picks anything — the host's setup is the match it joins — and a co-op host cannot
   // pick for player 2 at all: the joining player owns that choice.
-  $('#p2-field').hidden = pve || opponent === MODE.SANDBOX || joining || hosting;
+  $('#p2-field').hidden = pve || opponent === MODE.SANDBOX || online;
   $('#p2-locked').hidden = !hosting;
   $('#p2-locked').textContent = hostGuestCharacter
     ? `P2 Choice: ${CHARACTERS[hostGuestCharacter].name}`
     : 'P2 Choice: Waiting for P2 selection...';
   $('#grade-field').hidden = !pve;
-  $('#net-field').hidden = !online;
-  $('#room-code-field').hidden = !joining;
+  $<HTMLButtonElement>('#setup-form .start-match').textContent = online ? 'Online Lobby' : 'Start Match';
   $('#start-hint').textContent = online
-    ? joining
-      ? 'The host creates the match; its board layout, grid size and fighters apply to both players. Pick your sorcerer once you join.'
-      : 'You host with these settings. Share the five-character code with player 2, then launch once they pick a sorcerer.'
+    ? 'Host a room or join one with a code from the Online Lobby. The host’s board layout, grid size and fighters apply to both players.'
     : opponent === MODE.RANDOM
       ? 'The opponent will be rolled when the match starts: Player vs AI or Pass & Play.'
       : '';
@@ -711,7 +708,6 @@ function populateSetup(): void {
   gradeSelect.value = AI_GRADE.ELITE;
 
   $<HTMLSelectElement>('#mode').addEventListener('change', syncSetupFields);
-  $<HTMLSelectElement>('#net-role').addEventListener('change', syncSetupFields);
   $<HTMLSelectElement>('#starting-hp').addEventListener('change', syncSetupFields);
   $<HTMLSelectElement>('#board-mode').addEventListener('change', syncBoardClearDefault);
   syncSetupFields();
@@ -740,7 +736,7 @@ function applySetup(setup: MatchSetup): void {
  * opponent and player 2's locked pick are left alone: those belong to the room itself.
  */
 function randomizeSetup(): void {
-  const hosting = readOpponent() === MODE.ONLINE && readNetRole() === NET_ROLE.HOST;
+  const hosting = readOpponent() === MODE.ONLINE && session?.netRole === NET_ROLE.HOST;
   const rolled = rollSetup(readSetup(), createCryptoRandom(), {
     lockOpponent: true,
     lockP2Character: hosting,
@@ -940,9 +936,8 @@ function startMatch(): void {
   clearAllVfx();
   const opponent = readOpponent();
   if (opponent === MODE.ONLINE) {
-    stopSession();
-    if (readNetRole() === NET_ROLE.JOIN) startOnlineGuest();
-    else startOnlineHost();
+    // Online matches are hosted or joined from the lobby; nothing starts until a room is open.
+    openOnlineModal();
     return;
   }
   stopSession();
@@ -1040,10 +1035,6 @@ function startMatch(): void {
 // Online play
 // ---------------------------------------------------------------------------
 
-function readNetRole(): NetRole {
-  return $<HTMLSelectElement>('#net-role').value === NET_ROLE.JOIN ? NET_ROLE.JOIN : NET_ROLE.HOST;
-}
-
 /** Seat labels for an online match: the local seat is always "You". */
 function onlineLabels(config: Pick<GameConfigPayload, 'players'>, role: NetRole): Map<PlayerId, string> {
   const first = config.players[0];
@@ -1058,9 +1049,52 @@ function onlineLabels(config: Pick<GameConfigPayload, 'players'>, role: NetRole)
   ]);
 }
 
+/** Opens the Online Lobby from Start Match in Online mode; nothing starts until a room is open or joined. */
+function openOnlineModal(): void {
+  selectOnlineTab(NET_ROLE.HOST);
+  $('#online-modal').hidden = false;
+}
+
+function hideOnlineModal(): void {
+  $('#online-modal').hidden = true;
+}
+
+function selectOnlineTab(tab: NetRole): void {
+  const host = tab === NET_ROLE.HOST;
+  const tabs: Array<[string, boolean]> = [
+    ['tab-host', host],
+    ['tab-join', !host],
+  ];
+  for (const [id, active] of tabs) {
+    const button = $(`#${id}`);
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+  }
+  $('#panel-host').hidden = !host;
+  $('#panel-join').hidden = host;
+  if (!host) $<HTMLInputElement>('#room-code-input').focus();
+}
+
+/** The Host tab's Open Room button: player 1 opens a room with the current rules. */
+function openOnlineRoom(): void {
+  stopSession();
+  startOnlineHost();
+}
+
+/** Closing the lobby while hosting closes the room too, since nobody could see its code. */
+function closeOnlineModal(): void {
+  if (session?.netRole === NET_ROLE.HOST) {
+    showSetup();
+    return;
+  }
+  hideOnlineModal();
+}
+
 function showLobby(code: string, status: string): void {
   const lobby = $('#lobby');
   lobby.hidden = false;
+  hideOnlineModal();
   $('#setup').hidden = true;
   $('#match').hidden = true;
   $('#result').hidden = true;
@@ -1105,16 +1139,16 @@ function setHostStatus(text: string, error = false): void {
 }
 
 /**
- * The setup form's Start Match button is also the Join button in online mode. A dial that is
- * under way disables it, and every dead end re-arms it so a correctable code is never a
- * dead screen.
+ * The lobby's Join button. A dial that is under way disables it, and every dead end re-arms it
+ * so a correctable code is never a dead screen.
  */
 function setJoinBusy(busy: boolean): void {
-  $<HTMLButtonElement>('#setup-form button[type="submit"]').disabled = busy;
+  $<HTMLButtonElement>('#join-room').disabled = busy;
 }
 
 function showHostRoom(code: string): void {
   $('#host-room').hidden = false;
+  $('#open-room').hidden = true;
   $('#host-code').hidden = false;
   $('#host-code-value').textContent = code;
   $('#host-code').dataset.code = code;
@@ -1124,6 +1158,7 @@ function showHostRoom(code: string): void {
 
 function hideHostRoom(): void {
   $('#host-room').hidden = true;
+  $('#open-room').hidden = false;
 }
 
 function setP2Choice(characterId: CharacterId | null): void {
@@ -1148,8 +1183,8 @@ function onlinePreviewConfig(): MatchConfig {
 function syncOnlineLobbyPreview(): void {
   const current = session;
   if (!current?.host || current.engine !== null) return;
-  // Changing the room's role or mode closes it: those belong to the lobby, not the rules.
-  if (readOpponent() !== MODE.ONLINE || readNetRole() !== NET_ROLE.HOST) {
+  // Changing the mode closes the room: the rules a room shows belong to the online mode.
+  if (readOpponent() !== MODE.ONLINE) {
     showSetup();
     return;
   }
@@ -1299,6 +1334,7 @@ function startOnlineHost(): void {
       config.players,
     );
     hideHostRoom();
+    hideOnlineModal();
     session = {
       ...current,
       engine,
@@ -1743,6 +1779,7 @@ function playMenuTheme(): void {
 function showSetup(): void {
   stopSession();
   hideLobby();
+  hideOnlineModal();
   // Leaving a lobby must always hand the Join button back, whatever path brought us here.
   setJoinBusy(false);
   sandboxToolbar = null;
@@ -2656,6 +2693,16 @@ function bindEvents(): void {
   $('#setup-form').addEventListener('change', () => syncOnlineLobbyPreview());
 
   $('#lobby-cancel').addEventListener('click', () => showSetup());
+  $('#tab-host').addEventListener('click', () => selectOnlineTab(NET_ROLE.HOST));
+  $('#tab-join').addEventListener('click', () => selectOnlineTab(NET_ROLE.JOIN));
+  $('#open-room').addEventListener('click', () => openOnlineRoom());
+  $('#join-room').addEventListener('click', () => startOnlineGuest());
+  $<HTMLInputElement>('#room-code-input').addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || $<HTMLButtonElement>('#join-room').disabled) return;
+    event.preventDefault();
+    startOnlineGuest();
+  });
+  $('#online-close').addEventListener('click', () => closeOnlineModal());
   $('#copy-code').addEventListener('click', () => {
     const code = $('#lobby-code').dataset.code ?? '';
     const label = $('#copy-code-label');
