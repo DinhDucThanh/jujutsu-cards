@@ -251,3 +251,20 @@ describe('sandbox match', () => {
     expect(playerView(engine.getPublicView(), P2).characterId).toBe('sukuna');
   });
 });
+
+describe('training-ground HP diffing', () => {
+  const hpEvents = (events: readonly GameEvent[]) =>
+    events.filter((event) => event.type === 'DEBUG_ACTION' && event.action === 'HP');
+
+  it('reports a health change once and stays silent while the value is unchanged', () => {
+    const engine = makeEngine();
+
+    expect(hpEvents(expectOk(engine.debugSetHp(P1, 1, 0)))).toHaveLength(1);
+    // The dock can be clicked again, or held down through a repeat, without appending a
+    // second "1/100 HP" line for health that did not move.
+    expect(hpEvents(expectOk(engine.debugSetHp(P1, 1, 0)))).toHaveLength(0);
+    expect(hpEvents(expectOk(engine.debugSetHp(P1, 1, 0)))).toHaveLength(0);
+    expect(hpEvents(expectOk(engine.debugSetHp(P1, 2, 0)))).toHaveLength(1);
+    expect(playerView(engine.getPublicView(), P1).hp).toBe(2);
+  });
+});

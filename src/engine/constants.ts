@@ -19,7 +19,7 @@ export const HP_LIMITS = {
  */
 export const GAME_PACING = {
   /** 3D rotation of a card between back and front. Mirrored by `.card .inner` in CSS. */
-  CARD_FLIP_ANIMATION_MS: 500,
+  CARD_FLIP_ANIMATION_MS: 280,
   /** Mismatched cards stay face-up this long so players can memorize them. */
   MISMATCH_REVEAL_DURATION_MS: 1_800,
   /** The full-field reveal (Gojo's Six Eyes): exactly 3.0s on screen. */

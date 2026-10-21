@@ -3,6 +3,7 @@ import {
   BGM_TENSION_HP_FRACTION,
   BGM_TIER,
   OST_TRACK,
+  bgmSceneKey,
   bgmTrackFor,
   isLowHealth,
   resolveBgmTier,
@@ -151,5 +152,46 @@ describe('bgmTrackFor', () => {
 
   it('returns to the menu theme once the match is over', () => {
     expect(bgmTrackFor(null, IDLE)).toBe(OST_TRACK.MENU_THEME);
+  });
+});
+
+describe('bgmSceneKey', () => {
+  it('is identical for a frame the tier rule cannot see a difference in', () => {
+    const first = bgmSceneKey(view([player({ hp: 18 }), player({ id: 'p2' })]), IDLE);
+    const second = bgmSceneKey(view([player({ hp: 18 }), player({ id: 'p2' })]), IDLE);
+    expect(first).toBe(second);
+    expect(bgmSceneKey(null, IDLE)).toBe(bgmSceneKey(null, IDLE));
+  });
+
+  it('changes when the acting fighter crosses the low-HP threshold, and only then', () => {
+    // The key fingerprints the tier, not the raw HP: 29 and 30 are both "low HP", so the
+    // music must not be re-decided between them, while 31 is a different tier entirely.
+    const atThreshold = bgmSceneKey(view([player({ hp: 30 })]), IDLE);
+    expect(bgmSceneKey(view([player({ hp: 29 })]), IDLE)).toBe(atThreshold);
+    expect(bgmSceneKey(view([player({ hp: 31 })]), IDLE)).not.toBe(atThreshold);
+    expect(bgmSceneKey(view([player({ hp: 40 })]), IDLE)).not.toBe(atThreshold);
+  });
+
+  it('changes with a domain, a sentence, a result or the open modal', () => {
+    const base = bgmSceneKey(view([player()]), IDLE);
+    expect(bgmSceneKey(view([player({ domain: true })]), IDLE)).not.toBe(base);
+    expect(bgmSceneKey(view([player()], { sentencing: {} }), IDLE)).not.toBe(base);
+    expect(bgmSceneKey(view([player()], { result: { winnerId: 'p1' } }), IDLE)).not.toBe(base);
+    expect(bgmSceneKey(view([player()]), { menu: true, modal: null })).not.toBe(base);
+    expect(bgmSceneKey(view([player()]), { menu: false, modal: 'SLOT' })).not.toBe(base);
+  });
+
+  it('never reports a tier the key has not already changed for', () => {
+    const cases: PublicMatchView[] = [
+      view([player()]),
+      view([player({ hp: 20 })]),
+      view([player({ domain: true })]),
+      view([player({ immortal: true, jackpot: 'GOLDEN' })]),
+      view([player()], { result: { winnerId: 'p1' } }),
+    ];
+    const tiers = cases.map((match) => `${bgmSceneKey(match, IDLE)}=>${resolveBgmTier(match, IDLE)}`);
+    const keys = tiers.map((entry) => entry.split('=>')[0]);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(new Set(tiers).size).toBe(tiers.length);
   });
 });

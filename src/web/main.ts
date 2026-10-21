@@ -61,7 +61,15 @@ import {
   type VfxCue,
 } from '../engine/index.js';
 import { OnlineGuest, OnlineHost, toGameConfigPayload, type GuestHooks, type HostHooks } from '../net/online.js';
-import { createRoomCode, hostRoom, joinRoom, normalizeRoomCode, type PeerRoom, type PeerStatus } from '../net/peer.js';
+import {
+  ROOM_CONNECT_FAILED,
+  createRoomCode,
+  hostRoom,
+  joinRoom,
+  normalizeRoomCode,
+  type PeerRoom,
+  type PeerStatus,
+} from '../net/peer.js';
 import type { BoardStatePayload, GameConfigPayload } from '../net/network.js';
 import { RematchTally } from './match-result-modal.js';
 import { domainStatusOf, domainStatusTitle, renderDomainStatus } from './domain-status.js';
@@ -271,6 +279,25 @@ function part<T extends HTMLElement = HTMLElement>(root: ParentNode, selector: s
 
 function $<T extends HTMLElement = HTMLElement>(selector: string): T {
   return part<T>(document, selector);
+}
+
+/**
+ * Writes text only when it actually changed.
+ *
+ * The render loop paints every frame, but a value that did not move must not touch the DOM:
+ * assigning the same string still replaces the text node, which marks the panel dirty, wakes
+ * the layout and repaints a number nobody can see change. HP is the worst offender because
+ * it is the value a player stares at while they are losing.
+ */
+function setText(element: Element, value: string): void {
+  if (element.textContent !== value) element.textContent = value;
+}
+
+/** The same guard for a bar's width, in percent: an identical width is not a style change. */
+function setBarWidth(element: HTMLElement, fraction: number): void {
+  const percent = Math.max(0, Math.min(100, fraction * 100));
+  const width = `${percent}%`;
+  if (element.style.width !== width) element.style.width = width;
 }
 
 function panelEl(playerId: PlayerId): HTMLElement {
@@ -1078,13 +1105,22 @@ function setHostStatus(text: string, error = false): void {
   status.classList.toggle('error', error);
 }
 
+/**
+ * The setup form's Start Match button is also the Join button in online mode. A dial that is
+ * under way disables it, and every dead end re-arms it so a correctable code is never a
+ * dead screen.
+ */
+function setJoinBusy(busy: boolean): void {
+  $<HTMLButtonElement>('#setup-form button[type="submit"]').disabled = busy;
+}
+
 function showHostRoom(code: string): void {
   $('#host-room').hidden = false;
   $('#host-code').hidden = false;
   $('#host-code-value').textContent = code;
   $('#host-code').dataset.code = code;
   $<HTMLButtonElement>('#launch-match').disabled = hostGuestCharacter === null;
-  setHostStatus('Waiting for player 2…');
+  setHostStatus('Contacting the matchmaking service…');
 }
 
 function hideHostRoom(): void {
@@ -1144,12 +1180,17 @@ function startOnlineHost(): void {
       if (closingNet) return;
       switch (status.state) {
         case 'signaling':
-          setHostStatus('Opening the room…');
+          setHostStatus('Contacting the matchmaking service…');
           return;
         case 'waiting':
           // A dropped guest's pick must not arm the launch button for the next one.
           if (session?.engine === null) setP2Choice(null);
-          setHostStatus('Waiting for player 2…');
+          // The transport's own wording carries the room code hand-off message, and the
+          // failure detail when a guest's network could not reach this one.
+          setHostStatus(status.detail, status.detail.startsWith(ROOM_CONNECT_FAILED));
+          return;
+        case 'connecting':
+          setHostStatus('Connecting players…');
           return;
         case 'connected':
           ensureCoopAudio();
@@ -1419,12 +1460,23 @@ function startOnlineGuest(): void {
       if (closingNet) return;
       if (status.state === 'connected' && !joinSent) {
         joinSent = true;
+        // The handshake is a join request plus a ping: the request gets the host's rules
+        // moving, the ping measures the round trip the turn clock is aligned against.
         guest.requestJoin('Player 2');
+        guest.ping();
+        setJoinBusy(false);
         setLobbyStatus('Connected. Waiting for the host’s match conditions…');
         return;
       }
       if (status.state === 'error') {
+        // A dead room must not trap the screen: report it, hand the setup form back and
+        // let the player correct the code instead of waiting on a lobby forever.
+        setJoinBusy(false);
         setLobbyStatus(status.detail, true);
+        toast(status.detail);
+        later(() => {
+          if (session?.netRole === NET_ROLE.JOIN && session.engine === null) showSetup();
+        }, GAME_PACING.TOAST_MS + 600);
         return;
       }
       if (status.state === 'disconnected' && session) setNetStatus('Online · disconnected');
@@ -1476,7 +1528,8 @@ function startOnlineGuest(): void {
     roomCode: code,
   };
 
-  showLobby(code, 'Contacting the matchmaking service…');
+  setJoinBusy(true);
+  showLobby(code, 'Finding room…');
 
   function enterGuestArena(config: GameConfigPayload, snapshot: BoardStatePayload): void {
     const current = session;
@@ -1679,6 +1732,8 @@ function playMenuTheme(): void {
 function showSetup(): void {
   stopSession();
   hideLobby();
+  // Leaving a lobby must always hand the Join button back, whatever path brought us here.
+  setJoinBusy(false);
   sandboxToolbar = null;
   $('#sandbox-toolbar').hidden = true;
   $('#setup').hidden = false;
@@ -1825,10 +1880,12 @@ function renderPanel(player: PublicPlayerView, view: PublicMatchView, now: numbe
   const busy = (attempt?.currentSelection.length ?? 0) > 0;
 
   const dummy = current.mode === MODE.SANDBOX && player.id === P2;
-  part(panel, '.char-name').textContent = dummy ? 'Cursed Training Dummy' : character.name;
-  part(panel, '.label').textContent = current.labels.get(player.id) ?? player.id.toUpperCase();
-  part<HTMLElement>(panel, '.hp-fill').style.width = `${(player.hp / player.maxHp) * 100}%`;
-  part(panel, '.hp-text').textContent = `HP: ${player.hp} / ${player.maxHp}`;
+  setText(part(panel, '.char-name'), dummy ? 'Cursed Training Dummy' : character.name);
+  setText(part(panel, '.label'), current.labels.get(player.id) ?? player.id.toUpperCase());
+  // HP is painted only when it moved: the panel is redrawn every frame, and rewriting an
+  // unchanged number sixty times a second is churn the player can never see.
+  setBarWidth(part(panel, '.hp-fill'), player.hp / player.maxHp);
+  setText(part(panel, '.hp-text'), `HP: ${player.hp} / ${player.maxHp}`);
   // The barrier row carries barrier numbers only: the HP row sits directly above it, so
   // repeating HP there was noise. It keeps a dimmed track at 0 rather than vanishing, so
   // "no barrier" and "barrier spent" stay distinguishable at a glance.
@@ -1836,18 +1893,16 @@ function renderPanel(player: PublicPlayerView, view: PublicMatchView, now: numbe
   const shieldWrap = part(panel, '.shield-wrap');
   shieldWrap.classList.toggle('off', player.shield <= 0);
   shieldWrap.title = `Barrier soaks damage before HP · ceiling ${shieldCap}`;
-  part<HTMLElement>(panel, '.shield-fill').style.width =
-    `${Math.min(100, (player.shield / Math.max(1, shieldCap)) * 100)}%`;
-  part(panel, '.shield-text').textContent = `Barrier: ${player.shield} / ${shieldCap}`;
-  part<HTMLElement>(panel, '.ce-fill').style.width =
-    `${(player.cursedEnergy / GAME_CONSTANTS.MAX_CURSED_ENERGY) * 100}%`;
-  part(panel, '.ce-text').textContent = `${Math.floor(player.cursedEnergy)} / ${GAME_CONSTANTS.MAX_CURSED_ENERGY} CE`;
+  setBarWidth(part(panel, '.shield-fill'), player.shield / Math.max(1, shieldCap));
+  setText(part(panel, '.shield-text'), `Barrier: ${player.shield} / ${shieldCap}`);
+  setBarWidth(part(panel, '.ce-fill'), player.cursedEnergy / GAME_CONSTANTS.MAX_CURSED_ENERGY);
+  setText(part(panel, '.ce-text'), `${Math.floor(player.cursedEnergy)} / ${GAME_CONSTANTS.MAX_CURSED_ENERGY} CE`);
   part(panel, '.ce-wrap').classList.toggle('ready', player.cursedEnergy >= GAME_CONSTANTS.SKILL_CE_COST);
 
   const combo = part(panel, '.combo');
-  combo.textContent = `Combo ×${player.comboStreak}`;
+  setText(combo, `Combo ×${player.comboStreak}`);
   combo.classList.toggle('hot', player.comboStreak >= 1);
-  part(panel, '.pairs').textContent = `${player.pairsMatched} pairs`;
+  setText(part(panel, '.pairs'), `${player.pairsMatched} pairs`);
   panel.classList.toggle('dead', player.hp <= 0);
   panel.classList.toggle(
     'active',
@@ -1868,7 +1923,7 @@ function renderPanel(player: PublicPlayerView, view: PublicMatchView, now: numbe
   }
   const attemptText = attemptLabel(view, player.id, now, isHuman);
   if (attemptText) statusParts.push(attemptText);
-  part(panel, '.status').textContent = statusParts.join(' · ');
+  setText(part(panel, '.status'), statusParts.join(' · '));
 
   // The domain widget carries the state the status line can only hint at, including an
   // armed counter window that has not cancelled anything yet.
@@ -1977,29 +2032,34 @@ function renderTurn(view: PublicMatchView, now: number): void {
     // The detail line comes from the same place as the banner, so "Evaluating flip…"
     // can never sit next to "pick a second card".
     const active = owner === null ? undefined : attemptOfPlayer(view, owner);
-    $('#turn-detail').textContent = frozen
-      ? `Turn ${view.turnNumber} · ${selectionHint(active)}`
-      : `Turn ${view.turnNumber} · ${selectionHint(active).toLowerCase()}`;
+    setText(
+      $('#turn-detail'),
+      frozen
+        ? `Turn ${view.turnNumber} · ${selectionHint(active)}`
+        : `Turn ${view.turnNumber} · ${selectionHint(active).toLowerCase()}`,
+    );
   }
 
-  banner.textContent = text;
-  banner.className = `turn-banner ${tone}`;
-  timerFill.style.width = `${fraction * 100}%`;
+  setText(banner, text);
+  const bannerClass = `turn-banner ${tone}`;
+  if (banner.className !== bannerClass) banner.className = bannerClass;
+  setBarWidth(timerFill, fraction);
   timerFill.classList.toggle('low', view.boardMode !== BOARD_MODE.DUAL && fraction > 0 && fraction <= 1 / 3);
   timerFill.classList.toggle('idle', view.boardMode === BOARD_MODE.DUAL || view.result !== null);
-  $('#turn-time').textContent = timeText;
-  $('#turn-label').textContent = view.result === null ? `Cycle ${view.cycles}` : 'Final';
+  setText($('#turn-time'), timeText);
+  setText($('#turn-label'), view.result === null ? `Cycle ${view.cycles}` : 'Final');
 
   // Minimal round info under the board: where the match is, and the clock it is on.
-  $('#round-cycle').textContent =
-    view.result === null ? `Cycle ${view.cycles} · Turn ${view.turnNumber}` : 'Match over';
-  $('#round-pace').textContent =
+  setText($('#round-cycle'), view.result === null ? `Cycle ${view.cycles} · Turn ${view.turnNumber}` : 'Match over');
+  setText(
+    $('#round-pace'),
     view.boardMode === BOARD_MODE.DUAL
       ? 'both boards live'
       : view.turnTimeMs === null
         ? 'training ground · no clock'
-        : `${Math.round(view.turnTimeMs / 1000)}s turn clock`;
-  $('#mode-label').textContent = `${MODE_LABEL[current.mode]} · ${BOARD_MODE_LABEL[view.boardMode]}`;
+        : `${Math.round(view.turnTimeMs / 1000)}s turn clock`,
+  );
+  setText($('#mode-label'), `${MODE_LABEL[current.mode]} · ${BOARD_MODE_LABEL[view.boardMode]}`);
 }
 
 function renderFrame(): void {

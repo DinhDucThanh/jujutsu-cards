@@ -1,4 +1,10 @@
-import { OST_TRACK, bgmTrackFor, type BgmSceneInput, type OstTrack } from '../engine/bgm-tension.js';
+import {
+  OST_TRACK,
+  bgmSceneKey,
+  bgmTrackFor,
+  type BgmSceneInput,
+  type OstTrack,
+} from '../engine/bgm-tension.js';
 import type { PublicMatchView } from '../engine/public-view.js';
 import { SFX_STORAGE_KEY, type SfxStorage } from './sfx.js';
 import { createMasterOutput } from './audio-master.js';
@@ -15,8 +21,9 @@ import { createMasterOutput } from './audio-master.js';
  *  - **Pads** — detuned triangle and saw chords through a slow filter sweep and a stereo chorus.
  *  - **Leads** — arpeggios, brass stabs, chimes, bells, the courtroom clock and a drone.
  *
- * Every pitched voice except the sub-drone and the siren runs through a sidechain duck: on
- * each kick the pads and bass drop by -4dB for about 110ms, which gives the pumping groove.
+ * Every pitched voice except the sub-drone and the low-HP tension layer runs through a
+ * sidechain duck: on each kick the pads and bass drop by -4dB for about 110ms, which gives
+ * the pumping groove.
  *
  * Which track the match deserves is a rule in `bgm-tension.ts`. This module only turns that
  * answer into a scheduled sound. The outgoing track fades out over 350ms while the incoming
@@ -36,6 +43,39 @@ const COURT_ISOLATE_FADE_S = 0.12;
 /** The sidechain duck: -4dB, held for about 110ms. */
 export const DUCK_GAIN = 10 ** (-4 / 20);
 export const DUCK_RELEASE_S = 0.11;
+
+/**
+ * The low-HP tension layer: a muffled "lub-dub" heartbeat over a dark sub-drone.
+ *
+ * Every pitch here lives below 80Hz on purpose. The cue this replaces swept a triangle
+ * between 600Hz and 1kHz once per bar, which the ear reads as an ambulance siren: a
+ * midrange oscillator climbing and falling in pitch. Tension does not come from a higher
+ * pitch or a faster sweep, it comes from a slow body rhythm and a low bed of sound.
+ */
+export const LOW_HP_TENSION = {
+  /** The primary thump: 55Hz, decaying over 120ms. */
+  lubHz: 55,
+  lubS: 0.12,
+  /** The secondary thump: 48Hz, longer and quieter, a beat behind the first. */
+  dubHz: 48,
+  dubS: 0.16,
+  /** The gap between the two halves of one heartbeat. */
+  dubDelayS: 0.11,
+  /** One heartbeat per second, independent of the track's tempo: a resting pulse. */
+  beatS: 1,
+  /** The sub-drone's centre pitch in Hz. */
+  droneHz: 72,
+  /** How far either side of the centre the drone drifts, so it breathes instead of humming. */
+  droneDriftHz: 7.5,
+  /** Drift rate in Hz: one slow breath every fourteen seconds or so. */
+  droneDriftRate: 0.07,
+  /** Low-pass cutoff over the drone, which keeps it felt rather than heard. */
+  droneCutoffHz: 200,
+  /** The drone's own level. Quiet enough to sit under the music and the heartbeat. */
+  droneGain: 0.15,
+  /** The layer's fade in and out. Leaving is never a cut. */
+  fadeS: 0.4,
+} as const;
 
 /** The mix of one track. Patterns are 16 steps long, one bar per loop. */
 export interface OstProfile {
@@ -61,7 +101,12 @@ export interface OstProfile {
   readonly bell: boolean;
   readonly clock: boolean;
   readonly crackle: boolean;
-  readonly siren: boolean;
+  /**
+   * Adds the low-HP tension layer: a muffled lub-dub heartbeat over a dark sub-drone. It is
+   * synthesized by {@link LOW_HP_TENSION}, not by the 16-step grid, because a pulse that
+   * runs at its own tempo reads as a body under stress rather than as another drum.
+   */
+  readonly heartbeat: boolean;
   readonly drone: boolean;
   /** Waveform of the drone. Absent means a sine. */
   readonly droneWave?: OscillatorType;
@@ -126,7 +171,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: true,
-    siren: false,
+    heartbeat: false,
     drone: true,
     hiss: true,
   },
@@ -153,10 +198,10 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: false,
   },
-  /** Survival pulse: a heartbeat kick, a distorted siren sweep and dissonant clusters. */
+  /** Survival pulse: a muffled heartbeat, a dark sub-drone and dissonant clusters. */
   LOW_HP_THEME: {
     tempo: 134,
     level: 0.42,
@@ -167,7 +212,8 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
       [123.47, 146.83, 174.61],
     ],
     bassRoots: [87.31, 69.3, 77.78, 61.74],
-    kick: grid('x.x.....x.x.....'),
+    // The heartbeat layer owns the pulse, so the kick only marks the bar.
+    kick: grid('x.......x.......'),
     snare: grid('....x.......x...'),
     hat: grid('..o...o...o...o.'),
     bass: grid('x.......o.......'),
@@ -179,7 +225,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: false,
-    siren: true,
+    heartbeat: true,
     drone: false,
   },
   /** Oppressive domain barrier: a 40Hz sawtooth sub-drone swept by a 0.5Hz filter, a distorted kick and tritone stabs. */
@@ -205,7 +251,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: true,
     droneWave: 'sawtooth',
     droneHz: 40,
@@ -233,7 +279,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: true,
     droneChord: [73.4, 110, 174.6],
     droneSweep: 0.06,
@@ -265,7 +311,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: false,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: false,
     reel: grid('xxxxxxxxxxxxxxxx'),
   },
@@ -292,7 +338,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: true,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: false,
   },
   /** 7-7-7 Pachinko funk: blazing disco hats, an 8-bit chip lead, brass stabs and a euphoric fanfare. */
@@ -318,7 +364,7 @@ export const OST_PROFILES: Readonly<Record<OstTrack, OstProfile>> = {
     bell: true,
     clock: false,
     crackle: false,
-    siren: false,
+    heartbeat: false,
     drone: false,
   },
 };
@@ -374,6 +420,8 @@ export interface BgmState {
   readonly tempo: number;
   readonly muted: boolean;
   readonly contextState: AudioContextState | null;
+  /** True while the low-HP tension layer is sounding. */
+  readonly lowHpActive: boolean;
 }
 
 /** One live track: its bus, its sidechain duck, and everything that must be stopped with it. */
@@ -386,12 +434,26 @@ interface TrackRuntime {
   readonly padIn: AudioNode;
   readonly sources: AudioScheduledSourceNode[];
   readonly droneOsc: OscillatorNode | null;
-  readonly sirenOsc: OscillatorNode | null;
   /** Absolute sixteenth-step counter from the moment this track started. */
   step: number;
   nextStepAt: number;
   /** When the next courtroom woodblock tick falls. */
   nextTickAt: number;
+}
+
+/**
+ * One live low-HP tension layer. It owns its own envelope and everything that has to be
+ * stopped and released together, so no part of a heartbeat can outlive its cue.
+ */
+interface LowHpTensionRuntime {
+  /** The layer's own 0-1 envelope, faded in and out over {@link LOW_HP_TENSION.fadeS}. */
+  readonly gain: GainNode;
+  /** The persistent sources: the drone and its slow drift LFO. */
+  readonly sources: AudioScheduledSourceNode[];
+  /** Every node the layer created, disconnected together when the fade is done. */
+  readonly nodes: AudioNode[];
+  /** Absolute audio time of the next heartbeat. */
+  nextBeatAt: number;
 }
 
 /** Sets a gain to `target` over `seconds`, from wherever it is now. */
@@ -480,6 +542,39 @@ function playHat(context: AudioContext, noise: AudioBuffer, dest: AudioNode, tim
 /** Square-wave grit under a kick: a 110Hz buzz that dies in 50ms, so the downbeat sounds distorted. */
 function playGrit(context: AudioContext, dest: AudioNode, time: number, velocity: number): void {
   playTone(context, dest, 'square', 110, time, 0.05, velocity * 0.08);
+}
+
+/**
+ * One half of the heartbeat: a sub-bass sine that blooms in 12ms and decays exponentially.
+ *
+ * The node disconnects itself when it ends. A thump is one-shot, and a cue that plays once
+ * a second for the rest of a match must not leave a stopped oscillator in the graph every
+ * second — that is how a long low-HP fight slowly starves the audio thread.
+ */
+function playThump(
+  context: AudioContext,
+  dest: AudioNode,
+  time: number,
+  hz: number,
+  durationS: number,
+  peak: number,
+): void {
+  const osc = context.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(hz, time);
+  const gain = context.createGain();
+  // Exponential ramps cannot touch zero, so the envelope starts just above it.
+  gain.gain.setValueAtTime(0.0001, time);
+  gain.gain.exponentialRampToValueAtTime(Math.max(peak, 0.0002), time + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, time + durationS);
+  osc.connect(gain);
+  gain.connect(dest);
+  osc.onended = () => {
+    osc.disconnect();
+    gain.disconnect();
+  };
+  osc.start(time);
+  osc.stop(time + durationS + 0.02);
 }
 
 /** Gavel: a low wooden thump with a short crack on top. */
@@ -587,6 +682,12 @@ export class AdaptiveBgmEngine {
   private current: TrackRuntime | null = null;
   private scheduler: ReturnType<typeof globalThis.setInterval> | null = null;
   private running = false;
+  /** The last scene the tier rule was asked about, so a still frame costs one compare. */
+  private sceneKey: string | null = null;
+  /** The one low-HP tension layer, or null when nobody is fighting for their life. */
+  private lowHpTension: LowHpTensionRuntime | null = null;
+  /** Singleton guard: exactly one tension loop may exist at any time. */
+  private isLowHpActive = false;
 
   constructor(options: BgmEngineOptions = {}) {
     this.storage = options.storage === undefined ? defaultStorage() : options.storage;
@@ -684,8 +785,17 @@ export class AdaptiveBgmEngine {
     if (this.master) rampGain(this.master.gain, 0, 0.5, now);
   }
 
-  /** Applies the match state: the tier rule picks the track and the crossfade plays it. */
+  /**
+   * Applies the match state: the tier rule picks the track and the crossfade plays it.
+   *
+   * The render loop calls this on every frame, so the scene is fingerprinted first. A frame
+   * the rule cannot see a difference in does no work at all — no rule evaluation, no
+   * crossfade, and above all no audio node built for state that did not move.
+   */
   updateScene(view: PublicMatchView | null, scene: BgmSceneInput): void {
+    const key = bgmSceneKey(view, scene);
+    if (key === this.sceneKey) return;
+    this.sceneKey = key;
     this.setTrack(bgmTrackFor(view, scene));
   }
 
@@ -724,7 +834,13 @@ export class AdaptiveBgmEngine {
       tempo: this.current?.profile.tempo ?? 0,
       muted: this.mutedState,
       contextState: this.context?.state ?? null,
+      lowHpActive: this.isLowHpActive,
     };
+  }
+
+  /** The low-HP tension layer's envelope, for the tests and the debug hook. */
+  debugLowHp(): { readonly active: boolean; readonly gain: GainNode | null } {
+    return { active: this.isLowHpActive, gain: this.lowHpTension?.gain ?? null };
   }
 
   /** Stops every voice and closes the device. The engine is unusable afterwards. */
@@ -815,17 +931,6 @@ export class AdaptiveBgmEngine {
       hiss.start(now);
       sources.push(hiss);
     }
-    let sirenOsc: OscillatorNode | null = null;
-    if (profile.siren) {
-      sirenOsc = context.createOscillator();
-      sirenOsc.type = 'triangle';
-      const gain = context.createGain();
-      gain.gain.value = 0.05;
-      sirenOsc.connect(gain);
-      gain.connect(bus);
-      sirenOsc.start(now);
-      sources.push(sirenOsc);
-    }
     let droneOsc: OscillatorNode | null = null;
     if (profile.drone && profile.droneChord) {
       this.buildOrganDrone(context, bus, profile, sources, now);
@@ -860,6 +965,11 @@ export class AdaptiveBgmEngine {
       sources.push(droneOsc);
     }
 
+    // The survival track carries its own tension layer. It is started here, once per
+    // track, and never from the render loop: the tier change is the only event that may
+    // bring a heartbeat into existence.
+    if (profile.heartbeat) this.startLowHpTension(context, now);
+
     rampGain(bus.gain, profile.level, OST_FADE_IN_S, now);
     this.current = {
       track,
@@ -869,7 +979,6 @@ export class AdaptiveBgmEngine {
       padIn,
       sources,
       droneOsc,
-      sirenOsc,
       step: 0,
       nextStepAt: now + 0.05,
       nextTickAt: now + 0.05,
@@ -971,9 +1080,116 @@ export class AdaptiveBgmEngine {
     });
   }
 
+  /**
+   * Starts the low-HP tension layer: a muffled lub-dub heartbeat over a dark sub-drone.
+   *
+   * Guarded by {@link isLowHpActive}: while a layer is sounding, every further request is
+   * ignored, so the render loop asking on every frame can never stack a second heartbeat.
+   * The layer feeds the master bus rather than the track bus: its envelope is its own, and
+   * its 400ms release must not be shortened by a track crossfade.
+   */
+  private startLowHpTension(context: AudioContext, now: number): void {
+    if (this.isLowHpActive) return;
+    const master = this.master;
+    if (!master) return;
+    this.isLowHpActive = true;
+
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(1, now + LOW_HP_TENSION.fadeS);
+    gain.connect(master);
+
+    // The drone: a 72Hz triangle that drifts slowly between about 65Hz and 80Hz. A
+    // triangle keeps a little body above the fundamental; the low-pass trims those upper
+    // harmonics, so the drone reads as a presence under the music rather than a note.
+    const drone = context.createOscillator();
+    drone.type = 'triangle';
+    drone.frequency.setValueAtTime(LOW_HP_TENSION.droneHz, now);
+    const drift = context.createOscillator();
+    drift.type = 'sine';
+    drift.frequency.setValueAtTime(LOW_HP_TENSION.droneDriftRate, now);
+    const driftDepth = context.createGain();
+    driftDepth.gain.setValueAtTime(LOW_HP_TENSION.droneDriftHz, now);
+    drift.connect(driftDepth);
+    driftDepth.connect(drone.frequency);
+    const lowpass = context.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(LOW_HP_TENSION.droneCutoffHz, now);
+    lowpass.Q.setValueAtTime(0.7, now);
+    const droneGain = context.createGain();
+    droneGain.gain.setValueAtTime(LOW_HP_TENSION.droneGain, now);
+    drone.connect(lowpass);
+    lowpass.connect(droneGain);
+    droneGain.connect(gain);
+    drone.start(now);
+    drift.start(now);
+
+    this.lowHpTension = {
+      gain,
+      sources: [drone, drift],
+      nodes: [gain, drone, drift, driftDepth, lowpass, droneGain],
+      nextBeatAt: now + 0.05,
+    };
+  }
+
+  /**
+   * Ends the tension layer: a 400ms fade, then every source is stopped and every node is
+   * disconnected, so the graph is left exactly as it was before the player's HP dropped.
+   */
+  private stopLowHpTension(now: number): void {
+    const tension = this.lowHpTension;
+    this.lowHpTension = null;
+    this.isLowHpActive = false;
+    if (!tension) return;
+    const fadeS = LOW_HP_TENSION.fadeS;
+    rampGain(tension.gain.gain, 0, fadeS, now);
+    // Stopping on the audio clock keeps the cut exactly at the end of the fade, whatever the
+    // main thread is doing; the timer below only releases the nodes afterwards.
+    for (const source of tension.sources) {
+      try {
+        source.stop(now + fadeS);
+      } catch {
+        // Already stopped by an earlier teardown.
+      }
+    }
+    globalThis.setTimeout(() => {
+      for (const node of tension.nodes) {
+        try {
+          node.disconnect();
+        } catch {
+          // Already released: nothing left to free.
+        }
+      }
+    }, fadeS * 1000 + 80);
+  }
+
+  /** Schedules the heartbeats that fall inside the lookahead window. Cheap to call often. */
+  private tickHeartbeat(context: AudioContext): void {
+    const tension = this.lowHpTension;
+    if (!tension) return;
+    const now = context.currentTime;
+    // A tab that slept must not replay every missed beat as one burst.
+    if (tension.nextBeatAt < now) tension.nextBeatAt = now + 0.05;
+    while (tension.nextBeatAt < now + LOOKAHEAD_S) {
+      const beat = tension.nextBeatAt;
+      playThump(context, tension.gain, beat, LOW_HP_TENSION.lubHz, LOW_HP_TENSION.lubS, 0.5);
+      playThump(
+        context,
+        tension.gain,
+        beat + LOW_HP_TENSION.dubDelayS,
+        LOW_HP_TENSION.dubHz,
+        LOW_HP_TENSION.dubS,
+        0.34,
+      );
+      tension.nextBeatAt += LOW_HP_TENSION.beatS;
+    }
+  }
+
   /** Fades a track out, then stops its persistent sources and frees its bus. */
   private retire(runtime: TrackRuntime, now: number, fadeS: number = OST_FADE_OUT_S): void {
     if (this.current === runtime) this.current = null;
+    // HP rose, the match ended or another tier took over: the heartbeat leaves with its track.
+    if (runtime.profile.heartbeat) this.stopLowHpTension(now);
     rampGain(runtime.bus.gain, 0, fadeS, now);
     globalThis.setTimeout(() => {
       for (const source of runtime.sources) {
@@ -994,16 +1210,19 @@ export class AdaptiveBgmEngine {
   /** Schedules the steps that fall inside the lookahead window. Cheap to call often. */
   private tick(): void {
     const context = this.context;
+    if (!context || !this.running) return;
     const runtime = this.current;
-    if (!context || !runtime || !this.running) return;
-    // A tab that slept must not replay the missed steps as one burst.
-    if (runtime.nextStepAt < context.currentTime) runtime.nextStepAt = context.currentTime + 0.05;
-    const stepS = 60 / runtime.profile.tempo / 4;
-    while (runtime.nextStepAt < context.currentTime + LOOKAHEAD_S) {
-      this.scheduleStep(context, runtime, runtime.step, runtime.nextStepAt, stepS);
-      runtime.step += 1;
-      runtime.nextStepAt += stepS;
+    if (runtime) {
+      // A tab that slept must not replay the missed steps as one burst.
+      if (runtime.nextStepAt < context.currentTime) runtime.nextStepAt = context.currentTime + 0.05;
+      const stepS = 60 / runtime.profile.tempo / 4;
+      while (runtime.nextStepAt < context.currentTime + LOOKAHEAD_S) {
+        this.scheduleStep(context, runtime, runtime.step, runtime.nextStepAt, stepS);
+        runtime.step += 1;
+        runtime.nextStepAt += stepS;
+      }
     }
+    this.tickHeartbeat(context);
   }
 
   /** Places every voice of one 16th-note step. */
@@ -1020,10 +1239,6 @@ export class AdaptiveBgmEngine {
     if (step === 0) {
       if (profile.pad > 0) playPad(context, runtime.padIn, time, chord, barS, profile.pad, profile.padAttack ?? DEFAULT_PAD_ATTACK_S);
       if (runtime.droneOsc && root > 0 && profile.droneHz === undefined) runtime.droneOsc.frequency.setValueAtTime(root / 2, time);
-      if (runtime.sirenOsc) {
-        runtime.sirenOsc.frequency.setValueAtTime(600, time);
-        runtime.sirenOsc.frequency.linearRampToValueAtTime(1000, time + barS);
-      }
     }
 
     if (profile.tick) {

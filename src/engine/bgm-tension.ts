@@ -90,6 +90,37 @@ export function resolveBgmTier(view: PublicMatchView | null, scene: BgmSceneInpu
   return BGM_TIER.BATTLE;
 }
 
+/**
+ * A compact fingerprint of everything the tier rule reads.
+ *
+ * The render loop asks for the music on every frame, and the tier is a condition rather
+ * than an event, so most frames it has not moved at all. Comparing this key first means a
+ * still frame costs one string compare instead of a rule evaluation, a crossfade decision
+ * and — the point of the exercise — any audio work at all. Every field the rule looks at
+ * is in here; anything that changes a tier has to change the key.
+ */
+export function bgmSceneKey(view: PublicMatchView | null, scene: BgmSceneInput): string {
+  const scenePart = `${scene.menu ? 1 : 0}:${scene.modal ?? ''}`;
+  if (view === null) return `none;${scenePart}`;
+  const players = view.players
+    .map((player) =>
+      [
+        player.id,
+        isLowHealth(player.hp, player.maxHp) ? 1 : 0,
+        activeJackpot(player) ?? '',
+        player.activeDomain === null ? 0 : 1,
+      ].join('/'),
+    )
+    .join('|');
+  return [
+    scenePart,
+    view.result === null ? 0 : 1,
+    view.sentencing === null ? 0 : 1,
+    view.turnOwner ?? '',
+    players,
+  ].join(';');
+}
+
 /** The player whose turn it is when the mode has one; every player in DUAL, where both act. */
 function actingPlayers(view: PublicMatchView): readonly PublicPlayerView[] {
   if (view.turnOwner === null) return view.players;

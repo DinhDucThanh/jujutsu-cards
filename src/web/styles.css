@@ -10,6 +10,12 @@
   --ce: #38bdf8;
   --red: #e11d48;
   --gold: #facc15;
+  /*
+   * The spread of a card's coloured bloom. One variable so the phone layout can shrink
+   * every bloom at once: a 16px spread on a composited card is a lot of blended pixels for
+   * a decoration nobody reads at that size. See the mobile block at the end of this file.
+   */
+  --card-glow: 16px;
 }
 
 * {
@@ -880,6 +886,10 @@ button.sound-toggle.muted .sound-body {
   border: 0;
   aspect-ratio: 3 / 4;
   perspective: 1000px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  /* The hover lift is the card's own transform; the flip stays on `.inner`. */
+  transition: transform 0.15s ease;
 
   /*
    * Board performance: a slot is its own composited layer, and its contents are
@@ -921,7 +931,7 @@ button.sound-toggle.muted .sound-body {
   display: block;
   transform-style: preserve-3d;
   /* Mirrors GAME_PACING.CARD_FLIP_ANIMATION_MS. */
-  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   /* A hint only: no `contain`/`filter`/`opacity` may land in the 3D flip chain, or the
      browser flattens it and a flipped card shows its back face again. */
   will-change: transform;
@@ -1141,6 +1151,12 @@ button.sound-toggle.muted .sound-body {
 @media (hover: hover) and (pointer: fine) {
   .card:hover .back {
     border-color: var(--violet);
+  }
+
+  /* A lift on the wrapper only: `.inner` owns the 3D flip, so transforming it here
+     would overwrite the rotateY and leave a revealed card showing its back. */
+  .card:hover:not(.matched):not(.blocked) {
+    transform: translate3d(0, -2px, 0);
   }
 }
 
@@ -1436,7 +1452,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-hazard='FLESH'] .hazard::before {
   opacity: 1;
   background: radial-gradient(ellipse at 50% 55%, rgba(76, 29, 149, 0.2) 0%, rgba(76, 29, 149, 0.6) 100%);
-  box-shadow: inset 0 0 16px rgba(76, 29, 149, 0.7);
+  box-shadow: inset 0 0 var(--card-glow) rgba(76, 29, 149, 0.7);
 }
 
 .card[data-hazard='FLESH'] .hz-soul {
@@ -1682,7 +1698,7 @@ button.sound-toggle.muted .sound-body {
   background: linear-gradient(165deg, #450a0a 0%, #18181b 52%, #000 100%);
   border-color: rgba(220, 38, 38, 0.85);
   /* Cursed-object aura: a demonic crimson flame around the face, over the inner shade. */
-  box-shadow: 0 0 14px #ef4444, inset 0 0 18px rgba(127, 29, 29, 0.7);
+  box-shadow: 0 0 14px #ef4444, inset 0 0 var(--card-glow) rgba(127, 29, 29, 0.7);
 }
 
 .card.trap .face.front .kind {
@@ -1890,7 +1906,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='satoru_gojo'] .front {
   background: linear-gradient(160deg, #081426, #0c1d3d);
   border-color: #22d3ee;
-  box-shadow: inset 0 0 16px rgba(34, 211, 238, 0.45);
+  box-shadow: inset 0 0 var(--card-glow) rgba(34, 211, 238, 0.45);
 }
 
 .card[data-char='satoru_gojo'] .front .art,
@@ -1901,7 +1917,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='sukuna'] .front {
   background: linear-gradient(160deg, #450a0a, #171717);
   border-color: #ef4444;
-  box-shadow: inset 0 0 16px rgba(239, 68, 68, 0.45);
+  box-shadow: inset 0 0 var(--card-glow) rgba(239, 68, 68, 0.45);
 }
 
 .card[data-char='sukuna'] .front .art,
@@ -1915,7 +1931,7 @@ button.sound-toggle.muted .sound-body {
     repeating-linear-gradient(115deg, transparent 0 9px, rgba(148, 163, 184, 0.09) 9px 10px),
     linear-gradient(160deg, #140824, #261042);
   border-color: #7c3aed;
-  box-shadow: inset 0 0 16px rgba(91, 33, 182, 0.6);
+  box-shadow: inset 0 0 var(--card-glow) rgba(91, 33, 182, 0.6);
 }
 
 .card[data-char='mahito'] .front .art,
@@ -1926,7 +1942,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='kento_nanami'] .front {
   background: linear-gradient(160deg, #1f1a14, #161311);
   border-color: #fbbf24;
-  box-shadow: inset 0 0 16px rgba(251, 191, 36, 0.35);
+  box-shadow: inset 0 0 var(--card-glow) rgba(251, 191, 36, 0.35);
 }
 
 .card[data-char='kento_nanami'] .front .art,
@@ -1937,7 +1953,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='nobara_kugisaki'] .front {
   background: linear-gradient(160deg, #431407, #881337);
   border-color: #fb923c;
-  box-shadow: inset 0 0 16px rgba(251, 146, 60, 0.4);
+  box-shadow: inset 0 0 var(--card-glow) rgba(251, 146, 60, 0.4);
 }
 
 .card[data-char='nobara_kugisaki'] .front .art,
@@ -1948,7 +1964,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='yuji_itadori'] .front {
   background: linear-gradient(160deg, #0c192c, #0a1322);
   border-color: #7dd3fc;
-  box-shadow: inset 0 0 16px rgba(125, 211, 252, 0.4);
+  box-shadow: inset 0 0 var(--card-glow) rgba(125, 211, 252, 0.4);
 }
 
 .card[data-char='yuji_itadori'] .front .art,
@@ -1961,7 +1977,7 @@ button.sound-toggle.muted .sound-body {
   background: linear-gradient(160deg, #3b0764, #581c87);
   border-color: #e879f9;
   box-shadow:
-    inset 0 0 16px rgba(232, 121, 249, 0.5),
+    inset 0 0 var(--card-glow) rgba(232, 121, 249, 0.5),
     inset 0 -14px 22px rgba(103, 232, 249, 0.18);
 }
 
@@ -1973,7 +1989,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='jogo'] .front {
   background: linear-gradient(160deg, #7c2d12, #1c1917);
   border-color: #f97316;
-  box-shadow: inset 0 0 16px rgba(249, 115, 22, 0.45);
+  box-shadow: inset 0 0 var(--card-glow) rgba(249, 115, 22, 0.45);
 }
 
 .card[data-char='jogo'] .front .art,
@@ -1984,7 +2000,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='megumi_fushiguro'] .front {
   background: linear-gradient(160deg, #090d16, #111827);
   border-color: #818cf8;
-  box-shadow: inset 0 0 16px rgba(129, 140, 248, 0.4);
+  box-shadow: inset 0 0 var(--card-glow) rgba(129, 140, 248, 0.4);
 }
 
 .card[data-char='megumi_fushiguro'] .front .art,
@@ -1995,7 +2011,7 @@ button.sound-toggle.muted .sound-body {
 .card[data-char='kinji_hakari'] .front {
   background: linear-gradient(160deg, #134e4a, #0f172a);
   border-color: #2dd4bf;
-  box-shadow: inset 0 0 16px rgba(45, 212, 191, 0.4);
+  box-shadow: inset 0 0 var(--card-glow) rgba(45, 212, 191, 0.4);
 }
 
 .card[data-char='kinji_hakari'] .front .art,
@@ -2013,7 +2029,7 @@ button.sound-toggle.muted .sound-body {
   background: linear-gradient(160deg, #3f2d0a, #0f172a);
   border-color: #facc15;
   /* The 7:3 blade's golden bloom: an outer halo over a bright inner rim. */
-  box-shadow: 0 0 16px #facc15, inset 0 0 8px #fde047;
+  box-shadow: 0 0 var(--card-glow) #facc15, inset 0 0 8px #fde047;
 }
 
 .card[data-char='six_eyes'] .front {
@@ -2554,7 +2570,7 @@ button.sound-toggle.muted .sound-body {
 /* Six Eyes Insight: the ethereal cyan of the revealed pairs. */
 .awakening-card.accent-cyan {
   border-color: rgba(34, 211, 238, 0.9);
-  box-shadow: 0 0 16px rgba(34, 211, 238, 0.5);
+  box-shadow: 0 0 var(--card-glow) rgba(34, 211, 238, 0.5);
 }
 
 .awakening-kanji {
@@ -3222,7 +3238,7 @@ button.sound-toggle.muted .sound-body {
   border: 2px solid #fb7185;
   border-radius: 50%;
   background: radial-gradient(circle, #9f1239, #4c0519);
-  box-shadow: 0 0 16px rgba(225, 29, 72, 0.8), inset 0 0 0 3px #4c0519;
+  box-shadow: 0 0 var(--card-glow) rgba(225, 29, 72, 0.8), inset 0 0 0 3px #4c0519;
   color: #fecdd3;
   font-family: Georgia, 'Times New Roman', serif;
   font-size: 1.5rem;
@@ -5902,5 +5918,65 @@ body:has(.hakari.show, .sentencing.show, #domain-overlay.show) #sandbox-toolbar 
 
   .side .ability-cost {
     font-size: 0.6rem;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Phones and small tablets: a thermal budget, not a redesign.
+
+   A 900px viewport is a battery-powered GPU compositing a 32-card grid. The two things
+   that heat it up are backdrop-filter and wide, layered shadows. A blurred surface has to
+   be re-read whenever anything above it animates — which is every frame of a card flip —
+   and every wide bloom is blended on the card's own layer. Both are close to invisible at
+   this size, so they are the first things to go when the screen is small.
+   --------------------------------------------------------------------------- */
+@media screen and (max-width: 900px) {
+  :root {
+    /* Card blooms shrink from a 16px spread to a 6px one: same colour, a quarter of the
+       pixels to blend. */
+    --card-glow: 6px;
+  }
+
+  /*
+   * No backdrop filters on a phone. The arena frame, the card footers, the overlays and the
+   * lobby swap the blur for a flat, slightly opaque fill: one paint instead of a
+   * full-layer read per frame. This is the single biggest heat source in the app.
+   */
+  .board-frame,
+  .face.front .foot,
+  .awakening,
+  .sentencing,
+  .sentencing-panel,
+  .sentencing-side .sentencing-badge,
+  .hakari,
+  .codex-scrim,
+  .codex-panel,
+  .lobby {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(12, 14, 24, 0.92);
+  }
+
+  /*
+   * A composited layer per card is GPU memory: thirty-two slots and their inner wrappers is
+   * a lot of texture to keep resident. Only the card under a finger, a keyboard focus or an
+   * in-flight flip earns one; the rest stay on the CPU until they are touched. `contain`
+   * still bounds each slot's layout work, so the grid never re-lays out for one card.
+   */
+  .card {
+    will-change: auto;
+    transform: none;
+  }
+
+  .card .inner {
+    will-change: auto;
+  }
+
+  .card:active,
+  .card:focus-visible,
+  .card.revealed .inner,
+  .card:active .inner,
+  .card:focus-visible .inner {
+    will-change: transform;
   }
 }

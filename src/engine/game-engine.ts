@@ -1192,7 +1192,12 @@ export class GameEngine {
     if (gate) return this.reject(gate, events);
 
     const player = this.playerState(playerId);
-    player.hp = Math.max(1, Math.min(player.maxHp, Math.round(hp)));
+    const next = Math.max(1, Math.min(player.maxHp, Math.round(hp)));
+    // Strict state diffing: an unchanged HP is not an event. The dock can be clicked as
+    // often as the player likes without writing a new "1/100 HP" line each time, and the
+    // presentation layer only ever hears about health that actually moved.
+    if (next === player.hp) return this.accept(events);
+    player.hp = next;
     events.push(this.debug('HP', playerId, `${player.hp}/${player.maxHp} HP`));
     return this.accept(events);
   }

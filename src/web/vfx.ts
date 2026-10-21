@@ -7,7 +7,25 @@ type ParticleKind = 'dot' | 'shard' | 'ring' | 'streak';
  * same as four hundred at card size and cost a fraction of the fill time on mobile.
  */
 const MAX_PARTICLES = 42;
+/**
+ * The phone budget. A mobile GPU fills and blends every one of these per frame while it is
+ * already compositing a blurred board, and the difference between 42 and 30 is invisible at
+ * that size. Thirty is the strict ceiling on a mobile viewport.
+ */
+export const MAX_MOBILE_PARTICLES = 30;
+/** The CSS width at or below which a viewport is treated as a phone. */
+export const MOBILE_MAX_WIDTH = 900;
 const MAX_DPR = 2;
+
+/** The particle ceiling for a viewport, in CSS pixels. */
+export function particleBudget(viewportWidth: number): number {
+  return viewportWidth <= MOBILE_MAX_WIDTH ? MAX_MOBILE_PARTICLES : MAX_PARTICLES;
+}
+
+/** The budget for this window. A non-browser caller gets the full one. */
+function currentParticleBudget(): number {
+  return typeof window === 'undefined' ? MAX_PARTICLES : particleBudget(window.innerWidth);
+}
 /**
  * Hard ceiling for a canvas effect. Six Eyes keeps its caption and reveal overlay for the
  * engine's 3s window, but the particle loop itself never runs longer than this.
@@ -366,20 +384,20 @@ export function createCueBurst(cue: VfxCue, width: number, height: number): CueB
   return { particles: capParticles(recipe.spawn(width, height)), durationMs: recipe.durationMs };
 }
 
-function capParticles(spawned: readonly Particle[]): Particle[] {
-  if (spawned.length <= MAX_PARTICLES) return [...spawned];
+function capParticles(spawned: readonly Particle[], limit: number = currentParticleBudget()): Particle[] {
+  if (spawned.length <= limit) return [...spawned];
   // Rings are a cue's signature — the clap, the ratio impact — so every one is kept and
   // only the supporting dots, shards and streaks are sampled down to fill the budget.
   const rings = spawned.filter((particle) => particle.kind === 'ring');
   const rest = spawned.filter((particle) => particle.kind !== 'ring');
-  const budget = Math.max(0, MAX_PARTICLES - rings.length);
-  if (budget === 0) return rings.slice(0, MAX_PARTICLES);
+  const budget = Math.max(0, limit - rings.length);
+  if (budget === 0) return rings.slice(0, limit);
   const stride = rest.length / budget;
   const sampled = Array.from(
     { length: Math.min(budget, rest.length) },
     (_, index) => rest[Math.floor(index * stride)] as Particle,
   );
-  return [...rings, ...sampled].slice(0, MAX_PARTICLES);
+  return [...rings, ...sampled].slice(0, limit);
 }
 
 /**
