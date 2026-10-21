@@ -1180,7 +1180,9 @@ function startOnlineHost(): void {
       if (closingNet) return;
       switch (status.state) {
         case 'signaling':
-          setHostStatus('Contacting the matchmaking service…');
+          // The transport's own wording, so a retry attempt is visible instead of a
+          // frozen "Contacting…" line that looks identical to a hang.
+          setHostStatus(status.detail);
           return;
         case 'waiting':
           // A dropped guest's pick must not arm the launch button for the next one.
@@ -1477,6 +1479,10 @@ function startOnlineGuest(): void {
         later(() => {
           if (session?.netRole === NET_ROLE.JOIN && session.engine === null) showSetup();
         }, GAME_PACING.TOAST_MS + 600);
+        return;
+      }
+      if (status.state === 'signaling' || status.state === 'connecting') {
+        setLobbyStatus(status.detail);
         return;
       }
       if (status.state === 'disconnected' && session) setNetStatus('Online · disconnected');

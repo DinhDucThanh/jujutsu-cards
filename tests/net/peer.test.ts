@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PeerStatus } from '../../src/net/peer.js';
 
 // The transport imports `Peer` from peerjs; the fake keeps the test offline and lets each
 // test fire the signaling events in the order a real server would.
@@ -10,13 +9,16 @@ vi.mock('peerjs', async () => {
 
 import {
   ICE_SERVERS,
+  PEER_OPEN_TIMEOUT_MS,
   ROOM_CONNECT_FAILED,
   ROOM_CONNECT_TIMEOUT_MS,
+  SIGNALING_ATTEMPTS,
   SIGNALING_FAILED,
-  SIGNALING_TIMEOUT_MS,
+  SIGNALING_RETRY_DELAY_MS,
   hostRoom,
   joinRoom,
   type PeerRoom,
+  type PeerStatus,
 } from '../../src/net/peer.js';
 import type { NetworkPacket } from '../../src/net/network.js';
 import { FakePeer } from '../helpers/fake-peer.js';
@@ -112,13 +114,57 @@ describe('hostRoom lifecycle', () => {
     expect(events.at(-1)).toEqual({ state: 'waiting', detail: 'The other player disconnected.' });
   });
 
-  it('reports a signaling server that never answers instead of waiting forever', () => {
+  it('rebuilds a stuck signaling socket instead of waiting on a dead one', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+    const first = FakePeer.last();
+
+    vi.advanceTimersByTime(PEER_OPEN_TIMEOUT_MS);
+
+    // The stuck socket is dropped at once, and the retry waits out its backoff.
+    expect(first.destroyed).toBe(true);
+    expect(FakePeer.instances).toHaveLength(1);
+    const retry = events.find((event) => event.detail.includes('retrying'));
+    expect(retry?.state).toBe('signaling');
+    expect(retry?.detail).toContain(`attempt 2 of ${SIGNALING_ATTEMPTS}`);
+
+    vi.advanceTimersByTime(SIGNALING_RETRY_DELAY_MS + 10);
+    expect(FakePeer.instances).toHaveLength(2);
+    // The retry claims the same id, so the code the host is about to share never changes.
+    expect(FakePeer.last().id).toBe('jjk-sorcery-K7QP4');
+    FakePeer.last().claim();
+    expect(events.at(-1)?.detail).toContain('Room created');
+  });
+
+  it('retries a network error and opens the room on the second socket', () => {
     vi.useFakeTimers();
     const { events, onStatus } = record();
     room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
 
-    vi.advanceTimersByTime(SIGNALING_TIMEOUT_MS);
+    FakePeer.last().emit('error', { type: 'network', message: 'offline' });
+    expect(FakePeer.instances).toHaveLength(1);
+
+    vi.advanceTimersByTime(SIGNALING_RETRY_DELAY_MS + 10);
+    expect(FakePeer.instances).toHaveLength(2);
+    FakePeer.last().claim();
+    expect(events.at(-1)).toEqual({
+      state: 'waiting',
+      detail: '🟢 Room created! Share the code with your friend.',
+    });
+  });
+
+  it('reports a dead matchmaking service after the last attempt', () => {
+    vi.useFakeTimers();
+    const { events, onStatus } = record();
+    room((status) => hostRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
+
+    vi.advanceTimersByTime(
+      PEER_OPEN_TIMEOUT_MS + SIGNALING_RETRY_DELAY_MS + PEER_OPEN_TIMEOUT_MS + 10,
+    );
+
     expect(events.at(-1)).toEqual({ state: 'error', detail: SIGNALING_FAILED });
+    expect(FakePeer.instances).toHaveLength(SIGNALING_ATTEMPTS);
   });
 });
 
@@ -192,12 +238,14 @@ describe('joinRoom lifecycle', () => {
     expect(peer.destroyed).toBe(true);
   });
 
-  it('reports the signaling failure when the socket never opens', () => {
+  it('reports the signaling failure after the retry is spent', () => {
     vi.useFakeTimers();
     const { events, onStatus } = record();
     room((status) => joinRoom('K7QP4', { onPacket: () => {}, onStatus: status }), onStatus);
 
-    vi.advanceTimersByTime(SIGNALING_TIMEOUT_MS);
+    vi.advanceTimersByTime(
+      PEER_OPEN_TIMEOUT_MS + SIGNALING_RETRY_DELAY_MS + PEER_OPEN_TIMEOUT_MS + 10,
+    );
 
     expect(events.at(-1)).toEqual({ state: 'error', detail: SIGNALING_FAILED });
   });

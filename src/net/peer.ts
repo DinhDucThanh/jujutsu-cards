@@ -35,8 +35,20 @@ export interface PeerRoom {
   close(): void;
 }
 
-/** How long a peer waits for the signaling socket before the room is called dead. */
-export const SIGNALING_TIMEOUT_MS = 10_000;
+/**
+ * How long one signaling socket gets to open before it is treated as half-open.
+ *
+ * The public server registers a room in well under a second, so this is not a patience
+ * setting: a websocket handshake can stay pending for the browser's ~25-second timeout,
+ * producing no `open` and no `error` at all. That is the "Contacting the matchmaking
+ * service…" hang. Two and a half seconds covers a slow mobile handshake and is short
+ * enough that nobody waits on a socket that is going nowhere.
+ */
+export const PEER_OPEN_TIMEOUT_MS = 2_500;
+/** Sockets tried per room, the first one included. */
+export const SIGNALING_ATTEMPTS = 2;
+/** Backoff before the retry, so a busy server is not hammered. */
+export const SIGNALING_RETRY_DELAY_MS = 1_200;
 /** How long a guest waits for a dialed connection to open before giving up. */
 export const ROOM_CONNECT_TIMEOUT_MS = 10_000;
 
@@ -149,64 +161,181 @@ function clear(timer: Timer | null): null {
   return null;
 }
 
+/** Errors that mean the server was unreachable, not that the room code is wrong. */
+const RETRYABLE_ERRORS: ReadonlySet<string> = new Set([
+  'network',
+  'server-error',
+  'socket-error',
+  'socket-closed',
+]);
+
+interface OpenPeerOptions {
+  /** The id to claim, or null to let the server assign one. */
+  readonly id: string | null;
+  /** True once the room is closed or given up on: no further attempts are made. */
+  readonly closed: () => boolean;
+  /** The socket registered with the signaling server. */
+  readonly onOpen: (peer: Peer) => void;
+  /** An attempt stalled or failed; another one follows after `retryInMs`. */
+  readonly onRetry: (attempt: number, retryInMs: number) => void;
+  /** Every attempt is spent. */
+  readonly onGiveUp: (detail: string) => void;
+}
+
+interface OpenPeer {
+  close(): void;
+}
+
+/**
+ * Opens a PeerJS peer and keeps trying when the signaling socket will not open.
+ *
+ * A room used to hang on "Contacting the matchmaking service…" because a websocket
+ * handshake can stay pending for the browser's ~25-second timeout: no `open`, no `error`,
+ * nothing to react to. Every attempt now has its own deadline, a stuck socket is discarded
+ * and dialled again, and the player is only told the room failed once the attempts are
+ * spent — roughly four seconds worst case instead of twenty-five. A retry claims the same
+ * id, so the room code the host is about to share never changes under them.
+ */
+function openPeer(options: OpenPeerOptions): OpenPeer {
+  let current: Peer | null = null;
+  let attempt = 1;
+  let deadline: Timer | null = null;
+  let retry: Timer | null = null;
+  let stopped = false;
+
+  const stop = (): void => {
+    stopped = true;
+    deadline = clear(deadline);
+    retry = clear(retry);
+    const peer = current;
+    current = null;
+    try {
+      peer?.destroy();
+    } catch {
+      // Already torn down, by the browser or by a close racing the deadline.
+    }
+  };
+
+  /**
+   * Discards `peer` and either dials again or reports the failure. A socket that already
+   * opened is never salvaged: the room owns it from that point on, and throwing it away
+   * would kill a working handshake over a signaling blip that no longer matters.
+   */
+  const salvage = (peer: Peer, detail: string = SIGNALING_FAILED): void => {
+    if (stopped || options.closed() || current !== peer) return;
+    deadline = clear(deadline);
+    current = null;
+    try {
+      peer.destroy();
+    } catch {
+      // Already down.
+    }
+    if (attempt >= SIGNALING_ATTEMPTS) {
+      stop();
+      options.onGiveUp(detail);
+      return;
+    }
+    attempt += 1;
+    options.onRetry(attempt, SIGNALING_RETRY_DELAY_MS);
+    retry = globalThis.setTimeout(() => {
+      retry = null;
+      start();
+    }, SIGNALING_RETRY_DELAY_MS);
+  };
+
+  const start = (): void => {
+    if (stopped || options.closed()) return;
+    const id = options.id;
+    const peer = id === null ? new Peer({ ...PEER_OPTIONS }) : new Peer(id, { ...PEER_OPTIONS });
+    current = peer;
+    // A healthy socket opens in well under a second; reaching this deadline means the
+    // handshake is stuck, and waiting longer is waiting on nothing.
+    deadline = globalThis.setTimeout(() => {
+      deadline = null;
+      salvage(peer);
+    }, PEER_OPEN_TIMEOUT_MS);
+
+    let opened = false;
+    peer.on('open', () => {
+      if (stopped || options.closed() || current !== peer) return;
+      opened = true;
+      deadline = clear(deadline);
+      options.onOpen(peer);
+    });
+    peer.on('error', (error) => {
+      if (opened || stopped || options.closed() || current !== peer) return;
+      const detail = describeError(error as { type?: string; message?: string });
+      const type = (error as { type?: string }).type ?? '';
+      // An unreachable server is worth another socket; a taken id or a missing room is not.
+      if (RETRYABLE_ERRORS.has(type)) salvage(peer, detail);
+      else {
+        stop();
+        options.onGiveUp(detail);
+      }
+    });
+  };
+
+  start();
+  return { close: stop };
+}
+
 /** Opens a room and waits for the guest to dial in. */
 export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
-  const peer = new Peer(peerIdForRoom(code), { ...PEER_OPTIONS });
   let connection: DataConnection | null = null;
   let closed = false;
-  let signalingTimer: Timer | null = null;
 
   handlers.onStatus({ state: 'signaling', detail: 'Contacting the matchmaking service…' });
 
-  // A code that never gets claimed is a dead end, so it reports instead of spinning.
-  signalingTimer = globalThis.setTimeout(() => {
-    signalingTimer = null;
-    if (!closed) handlers.onStatus({ state: 'error', detail: SIGNALING_FAILED });
-  }, SIGNALING_TIMEOUT_MS);
-
-  peer.on('open', () => {
-    signalingTimer = clear(signalingTimer);
-    if (!closed) {
+  const link = openPeer({
+    // The id must come from the code: the guest has nothing else to dial. A server-assigned
+    // id is a 36-character UUID, so neither it nor a five-character suffix of it can be
+    // typed into the join field — the code would address no one.
+    id: peerIdForRoom(code),
+    closed: () => closed,
+    onOpen: (peer) => {
+      if (closed) return;
       handlers.onStatus({ state: 'waiting', detail: '🟢 Room created! Share the code with your friend.' });
-    }
-  });
-
-  peer.on('connection', (incoming) => {
-    // One guest per room: a second dial-in is turned away rather than fought over.
-    if (connection) {
-      incoming.close();
-      return;
-    }
-    connection = incoming;
-    // The dial-in is not a connection yet: ICE still has to find a path through both NATs.
-    handlers.onStatus({ state: 'connecting', detail: 'Connecting players…' });
-    attachConnection(incoming, 1, handlers, {
-      onClosed: (detail) => {
-        connection = null;
-        if (!closed) handlers.onStatus({ state: 'waiting', detail });
-      },
-      onFailed: (detail) => {
-        // The room itself is still open: a different guest on a reachable network can join.
-        connection = null;
-        if (!closed) handlers.onStatus({ state: 'waiting', detail: `${detail} The room is still open.` });
-      },
-    });
-    // `incoming.open` can already be true when the host answers after the handshake.
-    const announce = (): void => {
-      if (!closed) handlers.onStatus({ state: 'connected', detail: 'Player 2 connected' });
-    };
-    if (incoming.open) announce();
-    else incoming.on('open', announce);
-  });
-
-  peer.on('error', (error) => {
-    if (closed) return;
-    handlers.onStatus({ state: 'error', detail: describeError(error) });
-  });
-  peer.on('disconnected', () => {
-    if (closed) return;
-    handlers.onStatus({ state: 'disconnected', detail: 'Signaling lost, reconnecting…' });
-    peer.reconnect();
+      peer.on('connection', (incoming) => {
+        // One guest per room: a second dial-in is turned away rather than fought over.
+        if (connection) {
+          incoming.close();
+          return;
+        }
+        connection = incoming;
+        // The dial-in is not a connection yet: ICE still has to find a path through both NATs.
+        handlers.onStatus({ state: 'connecting', detail: 'Connecting players…' });
+        attachConnection(incoming, 1, handlers, {
+          onClosed: (detail) => {
+            connection = null;
+            if (!closed) handlers.onStatus({ state: 'waiting', detail });
+          },
+          onFailed: (detail) => {
+            // The room itself is still open: a different guest on a reachable network can join.
+            connection = null;
+            if (!closed) handlers.onStatus({ state: 'waiting', detail: `${detail} The room is still open.` });
+          },
+        });
+        // `incoming.open` can already be true when the host answers after the handshake.
+        const announce = (): void => {
+          if (!closed) handlers.onStatus({ state: 'connected', detail: 'Player 2 connected' });
+        };
+        if (incoming.open) announce();
+        else incoming.on('open', announce);
+      });
+      peer.on('disconnected', () => {
+        if (closed) return;
+        handlers.onStatus({ state: 'disconnected', detail: 'Signaling lost, reconnecting…' });
+        peer.reconnect();
+      });
+    },
+    onRetry: (attempt, retryInMs) => {
+      if (closed) return;
+      handlers.onStatus({
+        state: 'signaling',
+        detail: `The matchmaking service is not answering — retrying in ${Math.round(retryInMs / 1000)}s (attempt ${attempt} of ${SIGNALING_ATTEMPTS})…`,
+      });
+    },
+    onGiveUp: (detail) => handlers.onStatus({ state: 'error', detail }),
   });
 
   return {
@@ -216,10 +345,9 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
     },
     close() {
       closed = true;
-      signalingTimer = clear(signalingTimer);
+      link.close();
       connection?.close();
       connection = null;
-      peer.destroy();
       handlers.onStatus({ state: 'disconnected', detail: 'Room closed' });
     },
   };
@@ -227,75 +355,80 @@ export function hostRoom(code: string, handlers: RoomHandlers): PeerRoom {
 
 /** Dials a room code; the guest's PeerJS id is assigned by the signaling server. */
 export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
-  const peer = new Peer({ ...PEER_OPTIONS });
   let connection: DataConnection | null = null;
   let closed = false;
   let terminated = false;
-  let signalingTimer: Timer | null = null;
   let connectTimer: Timer | null = null;
-
-  const clearTimers = (): void => {
-    signalingTimer = clear(signalingTimer);
-    connectTimer = clear(connectTimer);
-  };
+  let link: OpenPeer | null = null;
 
   /**
    * Gives up on the room exactly once. The peer is destroyed so a retry starts from a clean
-   * signaling socket and a fresh code can be tried without the old attempt answering first.
+   * signaling socket and a corrected code can be tried without the old attempt answering
+   * first.
    */
   const giveUp = (detail: string): void => {
     if (closed || terminated) return;
     terminated = true;
-    clearTimers();
+    connectTimer = clear(connectTimer);
     try {
       connection?.close();
     } catch {
       // Already closed by the other side: nothing left to release.
     }
     connection = null;
-    peer.destroy();
+    link?.close();
     handlers.onStatus({ state: 'error', detail });
   };
 
   handlers.onStatus({ state: 'signaling', detail: 'Contacting the matchmaking service…' });
-  signalingTimer = globalThis.setTimeout(() => giveUp(SIGNALING_FAILED), SIGNALING_TIMEOUT_MS);
 
-  peer.on('open', () => {
-    if (closed || terminated) return;
-    signalingTimer = clear(signalingTimer);
-    handlers.onStatus({ state: 'connecting', detail: `Finding room ${code}…` });
-    const dial = peer.connect(peerIdForRoom(code), { reliable: true });
-    connection = dial;
-    attachConnection(dial, 0, handlers, {
-      onClosed: (detail) => {
-        connection = null;
-        if (!closed && !terminated) handlers.onStatus({ state: 'disconnected', detail });
-      },
-      onFailed: giveUp,
-    });
-    // A dial that never opens is not a wait worth leaving the player in.
-    connectTimer = globalThis.setTimeout(() => giveUp(ROOM_CONNECT_FAILED), ROOM_CONNECT_TIMEOUT_MS);
-    dial.on('open', () => {
+  link = openPeer({
+    // Nobody dials the guest, so its id is the server's to choose.
+    id: null,
+    closed: () => closed || terminated,
+    onOpen: (peer) => {
       if (closed || terminated) return;
-      clearTimers();
-      handlers.onStatus({ state: 'connected', detail: 'Connected to the host' });
-    });
-  });
-
-  peer.on('error', (error) => {
-    if (closed || terminated) return;
-    const detail = describeError(error as { type?: string; message?: string });
-    // Once the data channel is open, losing the signaling socket does not stop the match.
-    if (connection?.open) {
-      handlers.onStatus({ state: 'error', detail });
-      return;
-    }
-    giveUp(detail);
-  });
-  peer.on('disconnected', () => {
-    if (closed || terminated || connection?.open) return;
-    handlers.onStatus({ state: 'disconnected', detail: 'Signaling lost, reconnecting…' });
-    peer.reconnect();
+      handlers.onStatus({ state: 'connecting', detail: `Finding room ${code}…` });
+      const dial = peer.connect(peerIdForRoom(code), { reliable: true });
+      connection = dial;
+      attachConnection(dial, 0, handlers, {
+        onClosed: (detail) => {
+          connection = null;
+          if (!closed && !terminated) handlers.onStatus({ state: 'disconnected', detail });
+        },
+        onFailed: giveUp,
+      });
+      // A dial that never opens is not a wait worth leaving the player in.
+      connectTimer = globalThis.setTimeout(() => giveUp(ROOM_CONNECT_FAILED), ROOM_CONNECT_TIMEOUT_MS);
+      dial.on('open', () => {
+        if (closed || terminated) return;
+        connectTimer = clear(connectTimer);
+        handlers.onStatus({ state: 'connected', detail: 'Connected to the host' });
+      });
+      peer.on('error', (error) => {
+        if (closed || terminated) return;
+        const detail = describeError(error as { type?: string; message?: string });
+        // Once the data channel is open, losing the signaling socket does not stop the match.
+        if (connection?.open) {
+          handlers.onStatus({ state: 'error', detail });
+          return;
+        }
+        giveUp(detail);
+      });
+      peer.on('disconnected', () => {
+        if (closed || terminated || connection?.open) return;
+        handlers.onStatus({ state: 'disconnected', detail: 'Signaling lost, reconnecting…' });
+        peer.reconnect();
+      });
+    },
+    onRetry: (attempt, retryInMs) => {
+      if (closed || terminated) return;
+      handlers.onStatus({
+        state: 'signaling',
+        detail: `The matchmaking service is not answering — retrying in ${Math.round(retryInMs / 1000)}s (attempt ${attempt} of ${SIGNALING_ATTEMPTS})…`,
+      });
+    },
+    onGiveUp: giveUp,
   });
 
   return {
@@ -305,14 +438,14 @@ export function joinRoom(code: string, handlers: RoomHandlers): PeerRoom {
     },
     close() {
       closed = true;
-      clearTimers();
+      connectTimer = clear(connectTimer);
       try {
         connection?.close();
       } catch {
         // Already gone.
       }
       connection = null;
-      peer.destroy();
+      link?.close();
       handlers.onStatus({ state: 'disconnected', detail: 'Left the room' });
     },
   };
